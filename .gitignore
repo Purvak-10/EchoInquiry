@@ -1,0 +1,29 @@
+# Local secrets and environment files
+.env
+.env.local
+.env.*.local
+
+# Python bytecode and cache folders
+__pycache__/
+*.py[cod]
+*.pyc
+.venv/
+.venv
+
+# Local Codex metadata
+.codex
+.codex/
+
+# Generated project outputs
+logs/
+*.log
+research_report_*.json
+research_report_*.txt
+research_report_*.pdf
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+*.swp
+*.swo
