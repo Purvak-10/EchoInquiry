@@ -6,17 +6,27 @@
 
 ## Table of Contents
 
-1. [High-Level Overview](#1-high-level-overview)
-2. [LangGraph Pipeline — Full Diagram](#2-langgraph-pipeline--full-diagram)
-3. [ResearchState — The Shared Data Bus](#3-researchstate--the-shared-data-bus)
-4. [Node-by-Node Data Flow](#4-node-by-node-data-flow)
-5. [External System Integrations](#5-external-system-integrations)
-6. [Memory Layer Architecture](#6-memory-layer-architecture)
-7. [Living Document Cycle](#7-living-document-cycle)
-8. [Request Lifecycle — CLI Path](#8-request-lifecycle--cli-path)
-9. [Request Lifecycle — REST API Path](#9-request-lifecycle--rest-api-path)
-10. [Component Dependency Map](#10-component-dependency-map)
-11. [State Mutation Table](#11-state-mutation-table)
+- [EchoInquiry — System Architecture](#echoinquiry--system-architecture)
+  - [Table of Contents](#table-of-contents)
+  - [1. High-Level Overview](#1-high-level-overview)
+  - [2. LangGraph Pipeline — Full Diagram](#2-langgraph-pipeline--full-diagram)
+  - [3. ResearchState — The Shared Data Bus](#3-researchstate--the-shared-data-bus)
+  - [4. Node-by-Node Data Flow](#4-node-by-node-data-flow)
+    - [Concise Input → Processing → Output per Node](#concise-input--processing--output-per-node)
+  - [5. External System Integrations](#5-external-system-integrations)
+    - [Academic APIs — Retrieval](#academic-apis--retrieval)
+    - [LLM — Ollama (Local)](#llm--ollama-local)
+    - [Retraction Checker](#retraction-checker)
+  - [6. Memory Layer Architecture](#6-memory-layer-architecture)
+    - [Pinecone Vector Store](#pinecone-vector-store)
+    - [DynamoDB Schema](#dynamodb-schema)
+    - [S3 Bucket Layout](#s3-bucket-layout)
+    - [NetworkX Knowledge Graph](#networkx-knowledge-graph)
+  - [7. Living Document Cycle](#7-living-document-cycle)
+  - [8. Request Lifecycle — CLI Path](#8-request-lifecycle--cli-path)
+  - [9. Request Lifecycle — CLI Path (Primary)](#9-request-lifecycle--cli-path-primary)
+  - [10. Component Dependency Map](#10-component-dependency-map)
+  - [11. State Mutation Table](#11-state-mutation-table)
 
 ---
 
@@ -57,7 +67,6 @@
                     ┌─────────────────────────────┐
                     │      raw_query: str          │
                     │   session_id: str            │
-                    │   fast_mode: bool            │
                     └──────────────┬──────────────┘
                                    │
                                    ▼
@@ -265,7 +274,6 @@ All 9 nodes communicate exclusively through `ResearchState`, a `TypedDict` defin
 ResearchState
 ├── raw_query: str                    ← Set by caller before pipeline start
 ├── session_id: str                   ← UUID, set by caller
-├── fast_mode: bool                   ← Skip expensive steps if True
 │
 ├── parsed_query: Dict                ← Set by NODE 1
 │   ├── intent: str
@@ -582,7 +590,6 @@ $ python cli.py "impact of sleep on memory consolidation"
   Builds initial ResearchState:
     {raw_query: "impact of sleep...",
      session_id: "abc-123",
-     fast_mode: False,
      ...all other fields empty}
          │
          ▼
@@ -613,35 +620,43 @@ $ python cli.py "impact of sleep on memory consolidation"
 
 ---
 
-## 9. Request Lifecycle — REST API Path
+## 9. Request Lifecycle — CLI Path (Primary)
+
+The CLI is the primary and fully implemented entry point:
 
 ```
-$ uvicorn main:app --port 8000
+$ python cli.py "your research question"
          │
          ▼
-  FastAPI lifespan starts
-  scheduler_manager.start()  ← APScheduler begins
+  cli.py loads .env and pipeline modules
          │
          ▼
-  POST /research
-  Body: {"query": "...", "fast_mode": false}
+  Generates session_id = UUID
          │
          ▼
-  Generate session_id
-  Build ResearchState
+  Builds ResearchState:
+    {raw_query: "...", session_id: "...", ...}
          │
          ▼
-  await graph.ainvoke(state)
-  (async pipeline execution)
+  Calls graph.invoke(state) or graph.astream(state)
+    → LangGraph executes 9 nodes sequentially
+    → CLI streams each node result to terminal
          │
          ▼
-  Return final_report JSON response
+  Receives final_report from state
          │
-         ▼
-  GET /session/{session_id}
-  Reads from DynamoDB research-sessions
-  Returns stored final_report
+         ├──▶ Display: Executive Summary, Research Sections, Hypotheses
+         ├──▶ Display: Contradictions (colour-coded), Citations
+         ├──▶ Display: Confidence score, Follow-up recommendations
+         │
+         ├──▶ Optional: Email report via SMTP/SendGrid
+         │
+         └──▶ Optional: Enter Follow-up Q&A loop
+             FollowupAgent(session_id, report_data)
+             → Grounded answers from report context
 ```
+
+**Note**: The REST API (`main.py`) currently provides only health checks and scheduler management. For full research pipeline execution, use the CLI.
 
 ---
 
@@ -713,7 +728,6 @@ Which nodes read and write which state fields:
 |---|---|---|
 | `raw_query` | Caller | `query_parser`, `hypothesis_engine`, `output_generator` |
 | `session_id` | Caller | All nodes (for logging) |
-| `fast_mode` | Caller | Nodes that skip steps in fast mode |
 | `parsed_query` | `query_parser` (Node 1) | `research_planner`, `hypothesis_engine`, `retriever`, `synthesis_engine`, `output_generator` |
 | `research_plan` | `research_planner` (Node 2) | `retriever`, `output_generator` |
 | `hypotheses` | `hypothesis_engine` (Node 3) | `hypothesis_evaluation`, `synthesis_engine`, `output_generator` |
