@@ -72,7 +72,7 @@ All powered by a local LLM (Ollama) — **no OpenAI API key required**.
 ### 1. Clone & Install
 
 ```bash
-git clone https://github.com/your-username/EchoInquiry.git
+git clone https://github.com/Purvak-10/EchoInquiry.git
 cd EchoInquiry
 pip install -r requirements.txt
 ```
@@ -228,7 +228,7 @@ research_agent/              ← EchoInquiry project root
 ├── prompts/                  ← LLM prompts (one per agent)
 ├── memory/                   ← Pinecone, DynamoDB registry, NetworkX graph
 ├── tools/                    ← Academic APIs, web scraper, PDF parser, retraction checker
-├── aws/                      ← DynamoDB, S3, CloudWatch clients
+├── aws/                      ← DynamoDB, S3 clients
 ├── living_document/          ← Source recheck engine
 ├── scheduler/                ← APScheduler 30-day job
 └── utils/                    ← LLM helpers, email sender, logging
@@ -481,7 +481,7 @@ This gives you:
 | **REST API** | FastAPI + Uvicorn |
 | **Scheduler** | APScheduler |
 | **Terminal UI** | Rich |
-| **Observability** | Langfuse + AWS CloudWatch |
+| **Observability** | Langfuse |
 | **Testing** | pytest + moto |
 
 ---
