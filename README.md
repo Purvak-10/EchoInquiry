@@ -162,27 +162,41 @@ Start the API server:
 uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-### Endpoints
+### Available Endpoints
 
+#### Health Check
 ```
-POST /research
-  Body: {"query": "your research question", "fast_mode": false}
-  Returns: {"session_id": "...", "final_report": {...}}
-
-GET /session/{session_id}
-  Returns: stored session data and final report from DynamoDB
-
 GET /health
-  Returns: {"status": "ok", "scheduler": "running"}
+  Returns: {"status": "healthy", "component": "main", "scheduler": {...}}
+```
+
+#### Living Document Scheduler Status
+```
+GET /scheduler/status
+  Returns: Scheduler status with next check time and jobs
+```
+
+#### Trigger Manual Living Document Check
+```
+POST /scheduler/trigger-check
+  Returns: {"status": "success", "message": "Manual recheck completed"}
+  Purpose: Manually run source rechecking (for testing/maintenance)
 ```
 
 ### Example
 
 ```bash
-curl -X POST http://localhost:8000/research \
-  -H "Content-Type: application/json" \
-  -d '{"query": "CRISPR applications in treating genetic diseases"}'
+# Check API health
+curl -X GET http://localhost:8000/health
+
+# Get scheduler status
+curl -X GET http://localhost:8000/scheduler/status
+
+# Trigger a manual living document recheck
+curl -X POST http://localhost:8000/scheduler/trigger-check
 ```
+
+> **Note**: The primary research pipeline is accessed via CLI (`python cli.py`). The REST API currently provides health checks and scheduler management. For full pipeline execution, use the CLI interface.
 
 ---
 
@@ -504,14 +518,8 @@ This gives you:
 
 ---
 
-## 📄 License
-
-This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
-
----
-
 <div align="center">
 
-Built with ❤️ using LangGraph, Ollama, and Python — **EchoInquiry**
+Built with using LangGraph, Ollama, and Python — **EchoInquiry**
 
 </div>
