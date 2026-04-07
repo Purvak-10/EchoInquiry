@@ -99,7 +99,6 @@ The **EchoInquiry** is a fully automated, multi-agent AI system that accepts a p
 | REST API | **FastAPI** + **Uvicorn** |
 | Background scheduler | **APScheduler** `BackgroundScheduler` |
 | AWS SDK | **boto3** / **botocore** |
-| Monitoring | **AWS CloudWatch** |
 
 ### Developer Experience
 | Component | Library |
@@ -394,11 +393,6 @@ All API wrappers return a normalised `_base_source()` dict with consistent field
 | `S3_SOURCES_BUCKET` | Raw source documents and PDFs |
 | `S3_KNOWLEDGE_GRAPHS_BUCKET` | Serialised NetworkX knowledge graph JSON |
 
-### CloudWatch
-
-- Backend event logging via `utils/backend_logging.py` → `log_backend_event()`
-- Metrics for: pipeline step latencies, LLM token counts, API call rates, error counts
-
 ### AWS Region
 
 Default: `us-east-1` (configurable via `AWS_REGION` env var)
@@ -511,12 +505,14 @@ python cli.py scheduler check-now           # manual recheck
 
 **CORS**: enabled for all origins (development mode)
 
-**Key endpoints** (inferred from project structure):
+**Key endpoints** (REST API is secondary; CLI is primary entry point):
 ```
-POST /research          — run full pipeline
-GET  /session/{id}      — retrieve session results
-GET  /health            — health check
+GET  /health                     — health check
+GET  /scheduler/status           — scheduler status
+POST /scheduler/trigger-check    — manually trigger living document recheck
 ```
+
+**Note**: Full pipeline execution happens via CLI: `python cli.py "your query"`. The REST API provides health checks and scheduler management only.
 
 ---
 
@@ -531,8 +527,7 @@ GET  /health            — health check
 ### `utils/backend_logging.py`
 
 - `log_backend_event(event_name, **kwargs)` — structured event logging
-- Routes to CloudWatch in production, standard logging in development
-- Called by every pipeline agent to capture inputs, outputs, and timing
+- Used by every pipeline agent to capture inputs, outputs, and timing
 
 ### `utils/llm_usage.py`
 
@@ -693,7 +688,7 @@ research_agent/              ← EchoInquiry project root
 └── utils/
     ├── llm_helpers.py        ← LLM client, retry, streaming
     ├── llm_usage.py          ← Token usage tracking
-    ├── backend_logging.py    ← CloudWatch event logging
+    ├── backend_logging.py    ← Event logging
     └── email_sender.py       ← SMTP / SendGrid email
 ```
 
