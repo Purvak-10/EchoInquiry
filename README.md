@@ -112,9 +112,6 @@ python cli.py
 # Pass query directly
 python cli.py "impact of climate change on coral reef biodiversity"
 
-# Fast mode (skips some expensive steps)
-python cli.py "your query" --fast
-
 # Scheduler commands
 python cli.py scheduler start        # start 30-day background source recheck
 python cli.py scheduler stop         # stop the scheduler
