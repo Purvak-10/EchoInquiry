@@ -350,12 +350,6 @@ aws s3 mb s3://research-agent-exports --region us-east-1
 
 ---
 
-## 🧪 Running Tests
-
-There is currently no committed automated test suite in the repository.
-
----
-
 ## 📊 Report Structure
 
 Every research run produces a structured `final_report` with these sections:
@@ -472,11 +466,9 @@ This gives you:
 | **Graph DB** | NetworkX (serialised to S3) |
 | **Web scraping** | BeautifulSoup4 + lxml |
 | **PDF parsing** | PyMuPDF (fitz) |
-| **REST API** | FastAPI + Uvicorn |
 | **Scheduler** | APScheduler |
 | **Terminal UI** | Rich |
 | **Observability** | Langfuse |
-| **Testing** | No committed test suite currently |
 
 ---
 
