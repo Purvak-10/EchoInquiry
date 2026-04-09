@@ -50,7 +50,7 @@ All powered by a local LLM (Ollama) — **no OpenAI API key required**.
 | 🔄 **Living Documents** | Background scheduler rechecks tracked report sources every 30 days |
 | 💬 **Follow-up Q&A** | Chat with your report — grounded follow-up answers |
 | 📧 **Email Delivery** | Send reports via SMTP or SendGrid |
-| 🖥️ **Rich Terminal UI** | Colour-coded live pipeline stream, tables, and panels |
+| 🖥️ **Terminal UI** | Colour-coded live pipeline stream, tables, and panels |
 | 🌐 **REST API** | FastAPI endpoints for health checks and scheduler management |
 | 🏠 **Local LLM** | Runs entirely with Ollama — no cloud LLM costs |
 | 🗄️ **Cloud Persistence** | AWS DynamoDB (5 tables) + S3 (3 buckets) + Pinecone vector index |
@@ -510,6 +510,6 @@ A repository license file has not been added yet.
 
 <div align="center">
 
-Built with ❤️ using LangGraph, Ollama, and Python — **EchoInquiry**
+Built with using LangGraph, Ollama, and Python — **EchoInquiry**
 
 </div>
