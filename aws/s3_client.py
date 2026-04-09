@@ -60,7 +60,7 @@ class S3Client:
     def _handle_error(self, e: ClientError) -> None:
         code = e.response.get("Error", {}).get("Code", "")
         if code == "NoSuchBucket":
-            raise ValueError("Run setup_aws.py to create S3 buckets")
+            raise ValueError("Create the S3 buckets documented in README.md first")
         raise e
 
     def _report_text(self, report_dict: Dict[str, Any]) -> str:

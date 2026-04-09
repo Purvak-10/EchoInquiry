@@ -43,6 +43,26 @@ _STOPWORDS = {
     "with",
 }
 
+_GENERIC_QUERY_TERMS = {
+    "important",
+    "better",
+    "best",
+    "compare",
+    "comparison",
+    "versus",
+    "between",
+    "more",
+    "less",
+}
+
+_QUERY_TERM_ALIASES = {
+    "food": ["diet", "dietary", "nutrition", "nutritional"],
+    "diet": ["food", "dietary", "nutrition", "nutritional"],
+    "nutrition": ["food", "diet", "dietary", "nutritional"],
+    "exercise": ["physical activity", "fitness", "training"],
+    "sleep": ["sleep quality", "sleep deprivation", "circadian"],
+}
+
 _ALLOWED_HYPOTHESIS_VERDICTS = {"supported", "weakly_supported", "contested", "unsupported"}
 _ALLOWED_CONTRADICTION_SEVERITIES = {"low", "medium", "high"}
 
@@ -112,15 +132,25 @@ def _extract_query_terms(core_question: str, parsed_query: Dict[str, Any]) -> Li
     terms: List[str] = []
 
     for token in _tokenize(core_question):
-        if len(token) >= 4 and token not in _STOPWORDS:
+        if (
+            len(token) >= 4
+            and token not in _STOPWORDS
+            and token not in _GENERIC_QUERY_TERMS
+        ):
             terms.append(token)
+            terms.extend(_QUERY_TERM_ALIASES.get(token, []))
 
     keywords = parsed_query.get("keywords")
     if isinstance(keywords, list):
         for kw in keywords:
             for token in _tokenize(_as_text(kw, max_chars=120)):
-                if len(token) >= 4 and token not in _STOPWORDS:
+                if (
+                    len(token) >= 4
+                    and token not in _STOPWORDS
+                    and token not in _GENERIC_QUERY_TERMS
+                ):
                     terms.append(token)
+                    terms.extend(_QUERY_TERM_ALIASES.get(token, []))
 
     # Deduplicate while preserving order.
     seen = set()
@@ -180,8 +210,10 @@ def _sanitize_source_for_prompt(source: Dict[str, Any], idx: int, query_terms: L
 
 
 def _sanitize_hypothesis_for_prompt(item: Dict[str, Any], idx: int) -> Dict[str, Any]:
-    verdict_raw = _as_text(item.get("verdict"), max_chars=32).lower()
-    verdict = verdict_raw if verdict_raw in _ALLOWED_HYPOTHESIS_VERDICTS else "contested"
+    verdict = _normalize_hypothesis_verdict(
+        item.get("status"),
+        item.get("verdict"),
+    )
 
     confidence = item.get("confidence_posterior")
     try:
@@ -193,7 +225,7 @@ def _sanitize_hypothesis_for_prompt(item: Dict[str, Any], idx: int) -> Dict[str,
         "id": _as_text(item.get("id"), max_chars=40) or f"h{idx + 1}",
         "statement": _as_text(item.get("statement"), max_chars=320),
         "verdict": verdict,
-        "summary": _as_text(item.get("summary") or item.get("falsification_criteria"), max_chars=260),
+        "summary": _summarize_hypothesis(item, max_chars=260),
         "confidence_posterior": confidence,
     }
 
@@ -255,9 +287,12 @@ def _prepare_inputs(state: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "core_question": core_question,
         "query_terms": query_terms,
+        "keywords": parsed_query.get("keywords", []),
         "synthesis": synthesis,
         "hypotheses": sanitized_hypotheses,
+        "hypotheses_verdict": sanitized_hypotheses,
         "contradictions": top_contradictions,
+        "retrieved_sources": sanitized_sources,
         "top_sources": top_sources,
         "synthesis_json": _safe_json_dumps(synthesis),
         "hypotheses_json": _safe_json_dumps(sanitized_hypotheses),
@@ -394,6 +429,181 @@ def _contains_placeholders(text: str) -> bool:
     return False
 
 
+def _normalize_hypothesis_verdict(status: Any, verdict: Any) -> str:
+    status_text = _as_text(status, max_chars=40).lower()
+    verdict_text = _as_text(verdict, max_chars=40).lower()
+
+    if status_text in _ALLOWED_HYPOTHESIS_VERDICTS:
+        return status_text
+    if status_text == "supported":
+        return "supported"
+    if status_text in {"partially_supported", "weakly_supported"}:
+        return "weakly_supported"
+    if status_text in {"falsified", "refuted", "unsupported"}:
+        return "unsupported"
+    if status_text in {"insufficient_evidence", "mixed", "unverified"}:
+        return "contested"
+    if verdict_text in _ALLOWED_HYPOTHESIS_VERDICTS:
+        return verdict_text
+    return "contested"
+
+
+def _looks_structured(text: str) -> bool:
+    stripped = (text or "").strip()
+    if not stripped:
+        return False
+    return (
+        (stripped.startswith("{") and stripped.endswith("}"))
+        or (stripped.startswith("[") and stripped.endswith("]"))
+        or '"claim' in stripped
+        or '"testable' in stripped
+        or '"support' in stripped
+    )
+
+
+def _summarize_hypothesis(item: Dict[str, Any], max_chars: int = 280) -> str:
+    raw_summary = item.get("summary")
+    if isinstance(raw_summary, str) and raw_summary.strip() and not _looks_structured(raw_summary):
+        return _as_text(raw_summary, max_chars=max_chars)
+
+    if isinstance(raw_summary, dict):
+        for key in ("summary", "verdict", "conclusion", "statement"):
+            value = _as_text(raw_summary.get(key), max_chars=max_chars)
+            if value:
+                return value
+
+    verdict_sentence = _as_text(item.get("verdict"), max_chars=max_chars)
+    if verdict_sentence and verdict_sentence.lower() not in _ALLOWED_HYPOTHESIS_VERDICTS:
+        return verdict_sentence
+
+    supporting = item.get("supporting_evidence")
+    opposing = item.get("opposing_evidence")
+    supporting_text = _as_text(supporting, max_chars=160)
+    opposing_text = _as_text(opposing, max_chars=160)
+
+    verdict_bucket = _normalize_hypothesis_verdict(
+        item.get("status"),
+        item.get("verdict"),
+    )
+
+    if verdict_bucket == "supported":
+        summary = "Retrieved evidence mostly supports this hypothesis."
+    elif verdict_bucket == "weakly_supported":
+        summary = "Retrieved evidence leans toward support, but remains mixed."
+    elif verdict_bucket == "unsupported":
+        summary = "Retrieved evidence weighs against this hypothesis."
+    else:
+        summary = "Retrieved evidence is mixed or insufficient for a clear verdict."
+
+    if supporting_text:
+        summary += f" Supporting evidence: {supporting_text}"
+    elif opposing_text:
+        summary += f" Opposing evidence: {opposing_text}"
+
+    return _as_text(summary, max_chars=max_chars)
+
+
+def _is_comparison_query(core_question: str, output_format: str) -> bool:
+    lower_question = (core_question or "").lower()
+    return (
+        output_format == "comparison"
+        or "compare" in lower_question
+        or " versus " in lower_question
+        or " vs " in lower_question
+        or " more important " in lower_question
+        or " or " in lower_question
+    )
+
+
+def _extract_comparison_entities(core_question: str, keywords: List[Any]) -> List[str]:
+    entities: List[str] = []
+
+    if isinstance(keywords, list):
+        for keyword in keywords:
+            cleaned = _as_text(keyword, max_chars=80).strip().lower()
+            if not cleaned:
+                continue
+            if any(token in _GENERIC_QUERY_TERMS for token in _tokenize(cleaned)):
+                continue
+            entities.append(cleaned)
+
+    if not entities:
+        question = (core_question or "").lower()
+        question = question.replace(" versus ", " or ").replace(" vs ", " or ")
+        parts = re.split(r",|\bor\b", question)
+        for part in parts:
+            cleaned = part.strip()
+            for prefix in (
+                "what is more important",
+                "which is more important",
+                "which matters more",
+                "compare",
+                "between",
+            ):
+                cleaned = cleaned.replace(prefix, " ")
+            tokens = [
+                token for token in _tokenize(cleaned)
+                if token not in _STOPWORDS and token not in _GENERIC_QUERY_TERMS
+            ]
+            if tokens:
+                entities.append(" ".join(tokens[:2]))
+
+    seen = set()
+    unique_entities = []
+    for entity in entities:
+        key = entity.strip().lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        unique_entities.append(key)
+
+    return unique_entities[:4]
+
+
+def _entity_aliases(entity: str) -> List[str]:
+    aliases = [entity]
+    for token in _tokenize(entity):
+        aliases.extend(_QUERY_TERM_ALIASES.get(token, []))
+    return list(dict.fromkeys(aliases))
+
+
+def _format_entity_list(entities: List[str]) -> str:
+    labels = [entity.replace("_", " ") for entity in entities if entity]
+    if not labels:
+        return "the compared factors"
+    if len(labels) == 1:
+        return labels[0]
+    if len(labels) == 2:
+        return f"{labels[0]} and {labels[1]}"
+    return f"{', '.join(labels[:-1])}, and {labels[-1]}"
+
+
+def _comparison_entity_coverage(top_sources: List[Dict[str, Any]], entities: List[str]) -> List[Tuple[str, float, int]]:
+    coverage: List[Tuple[str, float, int]] = []
+    for entity in entities:
+        aliases = _entity_aliases(entity)
+        score = 0.0
+        mentions = 0
+        for source in top_sources:
+            haystack = " ".join(
+                [
+                    _as_text(source.get("title"), max_chars=220),
+                    _as_text(source.get("abstract"), max_chars=900),
+                ]
+            ).lower()
+            matched = False
+            for alias in aliases:
+                if alias.lower() in haystack:
+                    matched = True
+                    break
+            if matched:
+                mentions += 1
+                score += 1.0 + float(source.get("credibility_score") or 0.0)
+        coverage.append((entity, round(score, 3), mentions))
+    coverage.sort(key=lambda item: (item[1], item[2]), reverse=True)
+    return coverage
+
+
 def _normalize_report_shape(report: Dict[str, Any], prepared: Dict[str, Any]) -> Dict[str, Any]:
     normalized: Dict[str, Any] = {
         "title": _as_text(report.get("title"), max_chars=220),
@@ -461,8 +671,8 @@ def _normalize_report_shape(report: Dict[str, Any], prepared: Dict[str, Any]) ->
                 {
                     "id": _as_text(item.get("id"), max_chars=40) or f"h{idx + 1}",
                     "statement": _as_text(item.get("statement"), max_chars=320),
-                    "verdict": verdict,
-                    "summary": _as_text(item.get("summary"), max_chars=300),
+                    "verdict": _normalize_hypothesis_verdict(item.get("status"), verdict),
+                    "summary": _summarize_hypothesis(item, max_chars=300),
                 }
             )
 
@@ -553,6 +763,31 @@ def _validate_report(report: Dict[str, Any], prepared: Dict[str, Any]) -> List[s
         if not any(term in lower_blob for term in query_terms):
             errors.append("report_not_grounded_to_query_terms")
 
+    if _is_comparison_query(
+        prepared.get("core_question", ""),
+        prepared.get("output_format", ""),
+    ):
+        executive_lower = _as_text(report.get("executive_summary"), max_chars=1200).lower()
+        entities = _extract_comparison_entities(
+            prepared.get("core_question", ""),
+            prepared.get("keywords", []),
+        )
+        mentioned = [
+            entity for entity in entities
+            if any(alias.lower() in executive_lower for alias in _entity_aliases(entity))
+        ]
+        comparison_cues = (
+            "compare",
+            "comparison",
+            "ranking",
+            "more important",
+            "head-to-head",
+            "single universal ranking",
+            "balanced enough",
+        )
+        if len(mentioned) < min(2, len(entities)) or not any(cue in executive_lower for cue in comparison_cues):
+            errors.append("comparison_question_not_answered_directly")
+
     citations = report.get("citations") if isinstance(report.get("citations"), list) else []
     if not citations:
         errors.append("missing_citations")
@@ -621,14 +856,16 @@ def _build_grounded_report(prepared: Dict[str, Any], quality_errors: List[str]) 
 
     hypotheses_verdict = []
     for idx, hypothesis in enumerate(hypotheses[:5]):
-        verdict_raw = _as_text(hypothesis.get("verdict"), max_chars=32).lower()
-        verdict = verdict_raw if verdict_raw in _ALLOWED_HYPOTHESIS_VERDICTS else "contested"
+        verdict = _normalize_hypothesis_verdict(
+            hypothesis.get("status"),
+            hypothesis.get("verdict"),
+        )
         hypotheses_verdict.append(
             {
                 "id": _as_text(hypothesis.get("id"), max_chars=40) or f"h{idx + 1}",
                 "statement": _as_text(hypothesis.get("statement"), max_chars=300),
                 "verdict": verdict,
-                "summary": _as_text(hypothesis.get("summary"), max_chars=280),
+                "summary": _summarize_hypothesis(hypothesis, max_chars=280),
             }
         )
 
@@ -667,6 +904,59 @@ def _build_grounded_report(prepared: Dict[str, Any], quality_errors: List[str]) 
         ]
 
     key_conclusions = finding_texts[:5]
+
+    if _is_comparison_query(core_question, output_format):
+        entities = _extract_comparison_entities(core_question, prepared.get("keywords", []))
+        coverage = _comparison_entity_coverage(top_sources, entities)
+        represented = [item for item in coverage if item[1] > 0]
+        entity_list = _format_entity_list(entities)
+
+        if len(represented) >= 2:
+            strongest_entity = represented[0][0]
+            strongest_score = represented[0][1]
+            second_score = represented[1][1]
+            if strongest_score <= second_score * 1.2:
+                executive_summary = (
+                    f"Evidence suggests the retrieved literature does not support a single universal ranking among {entity_list}. "
+                    "These factors appear complementary, and this run does not contain enough direct head-to-head evidence to conclude one is categorically more important than the others."
+                )
+            else:
+                executive_summary = (
+                    f"Evidence suggests the retrieved literature does not support a single universal ranking among {entity_list}. "
+                    f"In this run, {strongest_entity} is the most represented factor in the retrieved evidence, "
+                    "but the source mix is too unbalanced to conclude it is categorically more important overall."
+                )
+            coverage_text = "; ".join(
+                f"{entity} appears in {mentions} high-ranking source(s)"
+                for entity, _, mentions in coverage
+                if mentions > 0
+            )
+            evidence_section = f"Coverage in the retrieved evidence is: {coverage_text}."
+            key_conclusions = [
+                f"The retrieved evidence does not justify a single universal ranking among {entity_list}.",
+                "The factors are better treated as complementary health behaviors than as interchangeable substitutes.",
+            ]
+            if represented:
+                weakest = [entity for entity, _, mentions in coverage if mentions == 0]
+                if weakest:
+                    key_conclusions.append(
+                        f"This run contains thinner direct evidence for {_format_entity_list(weakest)} than for the other compared factors."
+                    )
+            research_gaps = [
+                f"More direct comparative studies are needed to quantify the relative contribution of {entity_list} within the same population and outcome window."
+            ] + research_gaps[:3]
+            follow_up_questions = [
+                f"Which studies directly compare the relative effects of {entity_list} on the same health outcome?",
+                f"How do the effects of {entity_list} differ by age, baseline risk, or chronic disease status?",
+            ]
+        elif entities:
+            executive_summary = (
+                f"Limited evidence supports a cautious answer: this run does not contain balanced comparative evidence to rank {entity_list} reliably."
+            )
+            key_conclusions = [
+                f"The retrieved sources do not provide a balanced enough basis to rank {entity_list} confidently.",
+            ]
+
     if not key_conclusions:
         key_conclusions = [executive_summary]
 

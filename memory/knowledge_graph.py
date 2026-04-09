@@ -74,7 +74,12 @@ class KnowledgeGraph:
             id, title, doi, year, credibility_score, authors: [str]
         }
         """
-        source_id = source.get("id") or source.get("doi") or source.get("title")
+        source_id = (
+            source.get("source_id")
+            or source.get("id")
+            or source.get("doi")
+            or source.get("title")
+        )
 
         if not source_id:
             logger.warning("Skipping source with no identifier")
@@ -96,7 +101,13 @@ class KnowledgeGraph:
             self.add_relation(source_id, session_id, "appears_in")
 
         # Authors
-        for author in source.get("authors", []):
+        authors = source.get("authors", [])
+        if isinstance(authors, str):
+            authors = [part.strip() for part in authors.split(",") if part.strip()]
+        elif not isinstance(authors, list):
+            authors = []
+
+        for author in authors:
             author_id = f"author:{author.lower()}"
 
             self._add_node_if_not_exists(

@@ -34,7 +34,8 @@ class DynamoDBClient:
         except ClientError as e:
             if e.response["Error"]["Code"] == "ResourceNotFoundException":
                 raise RuntimeError(
-                    f"DynamoDB tables not found. Run setup_aws.py first. Missing tables: {config.TABLE_SESSIONS}"
+                    "DynamoDB tables not found. Create the tables documented in "
+                    f"README.md. Missing tables include: {config.TABLE_SESSIONS}"
                 )
             raise
 
@@ -77,7 +78,7 @@ class DynamoDBClient:
             code = e.response["Error"]["Code"]
 
             if code == "ResourceNotFoundException":
-                raise ValueError("Run setup_aws.py first")
+                raise ValueError("Create the DynamoDB tables documented in README.md first")
 
             if code == "ProvisionedThroughputExceededException":
                 time.sleep(2)
@@ -250,10 +251,7 @@ class DynamoDBClient:
 
         def op():
             self.sources.update_item(
-                Key={
-                    "source_id": source_id,
-                    "session_id": session_id
-                },
+                Key={"source_id": source_id},
                 UpdateExpression="""
                     SET content_hash = :h,
                         retraction_status = :r,
@@ -351,6 +349,7 @@ class DynamoDBClient:
 
     def save_living_doc_check(self, check_dict) -> str:
 
+        check_dict.setdefault("alert_sent", 0)
         check_dict = self.float_to_decimal(check_dict)
         check_id = self.generate_id()
 
@@ -378,10 +377,7 @@ class DynamoDBClient:
 
         def op():
             self.living_doc_checks.update_item(
-                Key={
-                    "check_id": check_id,
-                    "source_id": source_id
-                },
+                Key={"check_id": check_id},
                 UpdateExpression="SET alert_sent = :a",
                 ExpressionAttributeValues={":a": 1}
             )

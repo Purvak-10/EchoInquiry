@@ -26,10 +26,15 @@ class LivingDocumentScheduler:
 
     def __init__(self):
         self.scheduler: Optional[BackgroundScheduler] = None
-        self.recheck_engine = SourceRecheckerEngine()
+        self.recheck_engine: Optional[SourceRecheckerEngine] = None
         self.is_running = False
         self.last_check_at: Optional[datetime] = None
         self.next_check_at: Optional[datetime] = None
+
+    def _get_recheck_engine(self) -> SourceRecheckerEngine:
+        if self.recheck_engine is None:
+            self.recheck_engine = SourceRecheckerEngine()
+        return self.recheck_engine
 
     def start(self):
         """Start the background scheduler"""
@@ -133,7 +138,7 @@ class LivingDocumentScheduler:
         """Run the recheck engine to verify all sources"""
         try:
             # Check all sources due for rechecking
-            results = await self.recheck_engine.check_all_sources()
+            results = await self._get_recheck_engine().check_all_sources()
 
             if results:
                 logger.info(
@@ -225,3 +230,4 @@ class LivingDocumentScheduler:
 
 # Global scheduler instance
 living_doc_scheduler = LivingDocumentScheduler()
+scheduler_manager = living_doc_scheduler

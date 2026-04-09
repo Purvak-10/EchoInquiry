@@ -77,11 +77,14 @@
                     │                               │
                     │  IN:  raw_query               │
                     │  OUT: parsed_query            │
-                    │       {intent, domain, scope, │
+                    │       {intent, domain,        │
+                    │        is_academic, scope,    │
                     │        core_question,         │
                     │        sub_questions,         │
-                    │        keywords, time_range,  │
-                    │        hypothesis_count}      │
+                    │        keywords,              │
+                    │        exclude_keywords,      │
+                    │        time_range,            │
+                    │        output_format}         │
                     └──────────────┬───────────────┘
                                    │
                                    ▼
@@ -127,17 +130,18 @@
                     │  │ │ SemanticScholar  │   │   │
                     │  │ │ PubMed           │   │   │
                     │  │ │ CrossRef         │   │   │
-                    │  │ │ Unpaywall        │   │   │
-                    │  │ │ WebScraper       │   │   │
-                    │  │ │ PDFParser        │   │   │
+                    │  │ │ Web Search       │   │   │
                     │  │ └──────────────────┘   │   │
                     │  └────────────────────────┘   │
+                    │   then optional Unpaywall +   │
+                    │   PDF enrichment + embeddings │
                     │                               │
                     │  OUT: retrieved_sources[]     │
                     │       {title, abstract,       │
                     │        authors, year, doi,    │
                     │        url, citation_count,   │
-                    │        journal, full_text}    │
+                    │        journal, full_text_    │
+                    │        snippet, s3_pdf_uri}   │
                     └──────────────┬───────────────┘
                                    │
                                    ▼
@@ -193,7 +197,7 @@
                     │       {claim_a, claim_b,      │
                     │        source_a, source_b,    │
                     │        severity, explanation, │
-                    │        confidence}            │
+                    │        resolution_hint}       │
                     └──────────────┬───────────────┘
                                    │
                                    ▼
@@ -230,13 +234,15 @@
                     │  OUT: final_report{}          │
                     │       {title,                 │
                     │        executive_summary,     │
-                    │        research_sections[],   │
+                    │        sections[],            │
+                    │        key_conclusions[],     │
                     │        hypotheses_verdict[],  │
                     │        contradictions_flagged │
                     │        research_gaps[],       │
                     │        citations[],           │
-                    │        confidence_score,      │
-                    │        followup_recommendations}│
+                    │        confidence_overall,    │
+                    │        follow_up_questions,   │
+                    │        generated_at}          │
                     └──────────────┬───────────────┘
                                    │
                     ┌──────────────┴──────────────────────────────────┐
@@ -250,11 +256,11 @@
                     │   │ contradictions│                             │
                     │   └──────────────┘   ┌──────────────────────┐  │
                     │                      │  S3                  │  │
-                    │   ┌──────────────┐   │  report.json         │  │
-                    │   │ NetworkX     │   │  report.txt          │  │
-                    │   │ KnowledgeGraph│  │  knowledge_graph.json│  │
-                    │   │ (→ S3)       │   └──────────────────────┘  │
-                    │   └──────────────┘                             │
+                    │   ┌──────────────┐   │  reports/{session}/  │  │
+                    │   │ NetworkX     │   │  {slug}.json/.txt    │  │
+                    │   │ KnowledgeGraph│  │  knowledge-graph/    │  │
+                    │   │ (→ S3)       │   │  graph.json          │  │
+                    │   └──────────────┘   └──────────────────────┘  │
                     └─────────────────────────────────────────────────┘
                                    │
                                    ▼
@@ -273,7 +279,7 @@ All 9 nodes communicate exclusively through `ResearchState`, a `TypedDict` defin
 ```
 ResearchState
 ├── raw_query: str                    ← Set by caller before pipeline start
-├── session_id: str                   ← UUID, set by caller
+├── session_id: str                   ← Allocated before pipeline start (`sessionN`, UUID fallback)
 │
 ├── parsed_query: Dict                ← Set by NODE 1
 │   ├── intent: str
@@ -283,9 +289,10 @@ ResearchState
 │   ├── sub_questions: List[str]
 │   ├── ambiguities: List[str]
 │   ├── keywords: List[str]
+│   ├── exclude_keywords: List[str]
 │   ├── time_range: str
 │   ├── output_format: str
-│   └── hypothesis_count: int
+│   └── is_academic: bool
 │
 ├── research_plan: Dict               ← Set by NODE 2
 │   ├── task_graph: List[Dict]
@@ -304,28 +311,34 @@ ResearchState
 ├── retrieved_sources: List[Dict]     ← Set by NODE 4, updated by NODE 5
 │   └── each: {title, abstract, authors, year, doi, url,
 │               source_api, citation_count, journal,
-│               full_text, credibility_score}
+│               full_text_snippet, s3_pdf_uri, credibility_score}
 │
 ├── contradictions: List[Dict]        ← Set by NODE 7
 │   └── each: {claim_a, claim_b, source_a, source_b,
-│               severity, explanation, confidence}
+│               severity, explanation, resolution_hint}
 │
 ├── synthesis: Dict                   ← Set by NODE 8
 │
 ├── final_report: Dict                ← Set by NODE 9
 │   ├── title: str
 │   ├── executive_summary: str
-│   ├── research_sections: List[Dict]
+│   ├── sections: List[Dict]
+│   ├── key_conclusions: List[str]
 │   ├── hypotheses_verdict: List[Dict]
 │   ├── contradictions_flagged: List[Dict]
 │   ├── research_gaps: List[str]
 │   ├── citations: List[Dict]
-│   ├── confidence_score: float
-│   └── followup_recommendations: List[str]
+│   ├── confidence_overall: float
+│   ├── follow_up_questions: List[str]
+│   └── generated_at: str
 │
-├── living_doc_id: Optional[str]      ← Set by NODE 9 (DynamoDB living doc ID)
+├── living_doc_id: Optional[str]      ← Set by NODE 9 (report-linked UUID)
+├── source_registry_entries: List[Dict] ← Reserved for registry metadata
 ├── s3_report_uri: Optional[str]      ← Set by NODE 9 (S3 report path)
-└── error_log: List[str]              ← Appended by any node on error
+├── error_log: List[str]              ← Reserved for runtime errors
+├── current_step: str                 ← Current pipeline step
+├── iteration_count: int              ← Reserved for iterative workflows
+└── fast_mode: bool                   ← Disables slower persistence/enrichment steps
 ```
 
 ---
@@ -337,14 +350,14 @@ ResearchState
 | Node | Key Input Fields | Core Processing | Key Output Fields |
 |---|---|---|---|
 | `query_parser` | `raw_query` | LLM prompt → JSON parse | `parsed_query` |
-| `research_planner` | `parsed_query` | LLM prompt → priority sort → PriorityTaskQueue | `research_plan` |
-| `hypothesis_generation` | `parsed_query` | LLM prompt → enrich with placeholders | `hypotheses[]` |
-| `retriever` | `parsed_query`, `research_plan` | ThreadPoolExecutor → 6 sources → DOI/title dedup | `retrieved_sources[]` |
+| `research_planner` | `parsed_query` | LLM prompt → validate task structure → priority sort | `research_plan` |
+| `hypothesis_generation` | `parsed_query` | LLM prompt → default to 3 hypotheses when count absent → enrich with placeholders | `hypotheses[]` |
+| `retriever` | `parsed_query`, `research_plan` | ThreadPoolExecutor → 4 parallel searches → DOI/title dedup → optional PDF/enrichment | `retrieved_sources[]` |
 | `credibility_scorer` | `retrieved_sources[]` | citation log-scale + journal tier + retraction check | `retrieved_sources[]` + `.credibility_score` |
 | `hypothesis_evaluation` | `hypotheses[]`, `retrieved_sources[]` | keyword match → LLM verdict per hypothesis | `hypotheses[]` + verdict fields |
-| `contradiction_detector` | `retrieved_sources[]` | LLM claim extract → ST encode → cosine sim → LLM confirm | `contradictions[]` |
+| `contradiction_detector` | `retrieved_sources[]` | bounded claim extract → ST encode → candidate pruning → capped LLM checks | `contradictions[]` |
 | `synthesis_engine` | top-10 sources, all context | keyword filter → LLM synthesis | `synthesis{}` |
-| `output_generator` | all state | LLM stream → local files → DynamoDB → S3 | `final_report{}` |
+| `output_generator` | all state | LLM call → quality guard → DynamoDB session update → S3 report save | `final_report{}` |
 
 ---
 
@@ -373,16 +386,16 @@ retriever (Node 4)
        │      Returns: DOI metadata, journal, publisher, year
        │      Retry: backoff (3 attempts)
        │
-       ├──▶ Unpaywall API
-       │      URL: api.unpaywall.org/v2/{doi}
-       │      Input: DOIs from other APIs
-       │      Returns: open-access PDF URL if available
-       │      Retry: backoff (3 attempts)
-       │
        ├──▶ Web Scraper
        │      Library: requests + BeautifulSoup4 + lxml
        │      Input: search queries via URL construction
        │      Returns: title, body text, URL
+       │
+       ├──▶ Unpaywall API (post-retrieval enrichment)
+       │      URL: api.unpaywall.org/v2/{doi}
+       │      Input: DOIs from retrieved academic results
+       │      Returns: open-access PDF URL if available
+       │      Retry: backoff (3 attempts)
        │
        └──▶ PDF Parser
               Library: PyMuPDF (fitz)
@@ -397,7 +410,7 @@ All agents
     │
     └──▶ Ollama Server (localhost:11434)
            Model: llama3.2:1b (default, configurable)
-           Interface: langchain-ollama OllamaLLM
+           Interface: langchain-ollama ChatOllama
            Retry wrapper: llm_call_with_retry() (utils/llm_helpers.py)
            Streaming: llm_stream() for output_generator
            Observability: Langfuse traces every call
@@ -426,7 +439,7 @@ credibility_scorer (Node 5)
 ```
                    ┌─────────────────────────────────────────┐
                    │              PINECONE INDEX              │
-                   │     Name: research-agent (default)       │
+                   │     Name: research-passages (default)    │
                    │     Dimensions: 384                       │
                    │     Metric: cosine                        │
                    │     Type: serverless (us-east-1)         │
@@ -454,51 +467,49 @@ credibility_scorer (Node 5)
 ### DynamoDB Schema
 
 ```
-research-sessions
+research-agent-sessions
   PK: session_id (str)
-  Attributes: raw_query, timestamp, status,
+  Attributes: raw_query, created_at, status,
               final_report_json, s3_report_uri
 
-research-sources
-  PK: source_id (str, DOI or UUID)
-  SK: session_id (str)
+research-agent-sources
+  PK: source_id (str)
+  GSI: session-index on session_id
   Attributes: title, abstract, authors, year, doi,
               url, credibility_score, source_api,
-              citation_count, journal
+              citation_count, journal, next_check_at, content_hash
 
-research-hypotheses
+research-agent-hypotheses
   PK: hypothesis_id (str)
-  SK: session_id (str)
+  GSI: session-index on session_id
   Attributes: statement, verdict, confidence_posterior,
               supporting_evidence, opposing_evidence
 
-research-contradictions
+research-agent-contradictions
   PK: contradiction_id (str)
-  SK: session_id (str)
+  GSI: session-index on session_id
   Attributes: claim_a, claim_b, source_a, source_b,
-              severity, explanation, confidence
+              severity, explanation, resolution_hint
 
-research-living-docs
-  PK: source_id (str)
-  Attributes: last_checked, next_check_due,
-              retraction_status, link_status,
-              citation_count, content_hash
+research-agent-living-doc-checks
+  PK: check_id (str)
+  Attributes: source_id, checked_at, alert_sent, change summary
 ```
 
 ### S3 Bucket Layout
 
 ```
 research-agent-reports/
-  └── {session_id}/
-      ├── report.json        ← Full final_report dict
-      └── report.txt         ← Plain-text version
+  └── reports/{session_id}/
+      ├── {slug}.json        ← Full final_report dict
+      └── {slug}.txt         ← Plain-text version
 
-research-agent-sources/
-  └── {session_id}/
-      └── {source_id}.json   ← Raw source data + PDF text
+research-agent-pdfs/
+  └── pdfs/{session_id}/
+      └── {session_prefix}_{doi}.pdf  ← Downloaded PDFs when available
 
-research-knowledge-graphs/
-  └── research_knowledge_graph.json   ← Serialised NetworkX DiGraph
+research-agent-exports/
+  └── knowledge-graph/graph.json      ← Serialised NetworkX DiGraph
 ```
 
 ### NetworkX Knowledge Graph
@@ -506,7 +517,7 @@ research-knowledge-graphs/
 ```
 NODE TYPES:
   concept  — extracted from source abstracts (words > 5 chars, not stopwords)
-  source   — a retrieved paper (doi as node ID)
+  source   — a retrieved paper (source_id / doi / title-derived node ID)
   claim    — a factual statement extracted by contradiction_detector
   author   — paper author name
   session  — a research session
@@ -533,9 +544,9 @@ PERSISTENCE:
                  INITIAL RESEARCH RUN
                          │
                          ▼
-            output_generator saves sources
-            to DynamoDB research-living-docs
-            with next_check_due = now + 30d
+            post-pipeline source registry saves
+            cited report sources to DynamoDB
+            research-agent-sources with next_check_at = now + 30d
                          │
                          │
         ─────────────────────────────────────────
@@ -546,7 +557,7 @@ PERSISTENCE:
   LivingDocumentScheduler._check_living_documents│
         │                                        │
         ▼                                        │
-  SourceRecheckerEngine.recheck_all()            │
+  SourceRecheckerEngine.check_all_sources()      │
         │                                        │
         ├──▶ For each source due for recheck:    │
         │         │                              │
@@ -557,17 +568,15 @@ PERSISTENCE:
         │         │   (HTTP HEAD request)        │
         │         │                              │
         │         ├── Citation count update      │
-        │         │   (Semantic Scholar API)     │
+        │         │   (CrossRef, then Semantic   │
+        │         │    Scholar fallback)         │
         │         │                              │
-        │         ├── Access change check        │
-        │         │   (Unpaywall API)            │
-        │         │                              │
-        │         └── Content hash check         │
-        │             (SHA-256 of abstract)      │
+        │         └── Source record update       │
+        │             (next_check_at, metadata)  │
         │                                        │
         ▼                                        │
-  Update DynamoDB research-living-docs           │
-  (new status, new next_check_due = +30d)        │
+  Update DynamoDB research-agent-sources         │
+  (new status, new next_check_at = +30d)         │
         │                                        │
         └────────────────────────────────────────┘
                    CYCLE REPEATS
@@ -584,7 +593,7 @@ $ python cli.py "impact of sleep on memory consolidation"
   cli.py loads .env, configures logging
          │
          ▼
-  Generates session_id = UUID
+  Allocates session_id (usually sessionN, UUID fallback)
          │
          ▼
   Builds initial ResearchState:
@@ -593,7 +602,8 @@ $ python cli.py "impact of sleep on memory consolidation"
      ...all other fields empty}
          │
          ▼
-  Calls graph.invoke(state) or graph.astream(state)
+  Calls stream_research(query)
+    → research_graph.py allocates state and runs graph.stream(...)
     → LangGraph executes nodes 1–9 sequentially
     → CLI prints each node result as it completes
          │
@@ -609,10 +619,13 @@ $ python cli.py "impact of sleep on memory consolidation"
          └──▶ Display: Follow-up recommendations
                   │
                   ▼
-           Prompt: "Send by email? (y/n)"
+           Prompt: "Send report so far by email? (y/n)"
                   │
                   ▼
-           Enter follow-up Q&A loop
+           Optional local save (.json + .txt)
+                  │
+                  ▼
+           Optional follow-up Q&A loop
            FollowupAgent(session_id, report_data)
              → LLM answers each question grounded in report
              → Loop until user types "exit"
@@ -631,14 +644,15 @@ $ python cli.py "your research question"
   cli.py loads .env and pipeline modules
          │
          ▼
-  Generates session_id = UUID
+  Allocates session_id (usually sessionN, UUID fallback)
          │
          ▼
   Builds ResearchState:
     {raw_query: "...", session_id: "...", ...}
          │
          ▼
-  Calls graph.invoke(state) or graph.astream(state)
+  Calls stream_research(query)
+    → research_graph.py allocates state and runs graph.stream(...)
     → LangGraph executes 9 nodes sequentially
     → CLI streams each node result to terminal
          │
@@ -650,6 +664,7 @@ $ python cli.py "your research question"
          ├──▶ Display: Confidence score, Follow-up recommendations
          │
          ├──▶ Optional: Email report via SMTP/SendGrid
+         ├──▶ Optional: Save JSON/TXT locally
          │
          └──▶ Optional: Enter Follow-up Q&A loop
              FollowupAgent(session_id, report_data)
@@ -737,6 +752,6 @@ Which nodes read and write which state fields:
 | `contradictions` | `contradiction_detector` (Node 7) | `synthesis_engine`, `output_generator` |
 | `synthesis` | `synthesis_engine` (Node 8) | `output_generator` |
 | `final_report` | `output_generator` (Node 9) | Caller, CLI display, API response |
-| `living_doc_id` | `output_generator` (Node 9) | Scheduler |
+| `living_doc_id` | `output_generator` (Node 9) | Caller / downstream integrations |
 | `s3_report_uri` | `output_generator` (Node 9) | API response |
-| `error_log` | Any node on error | CLI (displays errors), caller |
+| `error_log` | Reserved runtime field | Caller / debugging tools |

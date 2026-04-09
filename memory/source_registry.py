@@ -67,7 +67,12 @@ class SourceRegistry:
             "doi": source.get("doi"),
 
             # Content tracking
-            "content_hash": self._hash_content(source.get("content", "")),
+            "content_hash": self._hash_content(
+                source.get("content")
+                or source.get("full_text_snippet")
+                or source.get("abstract")
+                or source.get("title", "")
+            ),
 
             # Credibility
             "credibility_score": source.get("credibility_score"),
@@ -104,7 +109,9 @@ class SourceRegistry:
         Registers all sources referenced in the final report.
         """
 
-        source_map = {s["source_id"]: s for s in sources}
+        source_map = {
+            s.get("source_id"): s for s in sources if s.get("source_id")
+        }
         citations = final_report.get("citations", [])
 
         count = 0
@@ -114,7 +121,11 @@ class SourceRegistry:
 
         for citation in citations:
             source_id = citation.get("source_id")
-            claim_text = citation.get("claim_text", "")
+            claim_text = (
+                citation.get("claim_text")
+                or citation.get("title")
+                or final_report.get("title", "")
+            )
 
             if source_id not in source_map:
                 continue

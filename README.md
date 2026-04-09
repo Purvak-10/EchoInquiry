@@ -14,7 +14,6 @@
 [![FastAPI](https://img.shields.io/badge/API-FastAPI-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![Pinecone](https://img.shields.io/badge/VectorDB-Pinecone-purple)](https://www.pinecone.io)
 [![AWS](https://img.shields.io/badge/Cloud-AWS%20DynamoDB%20%7C%20S3-orange?logo=amazon-aws&logoColor=white)](https://aws.amazon.com)
-[![License](https://img.shields.io/badge/license-MIT-lightgrey)](LICENSE)
 
 </div>
 
@@ -27,13 +26,13 @@
 1. **Understands** your query — parses intent, domain, sub-questions, and keywords
 2. **Plans** a search strategy — generates a prioritised task graph
 3. **Hypothesises** — creates falsifiable scientific hypotheses *before* searching
-4. **Retrieves** — queries Semantic Scholar, PubMed, CrossRef, Unpaywall, and the web simultaneously
+4. **Retrieves** — queries Semantic Scholar, PubMed, CrossRef, and the web in parallel, then enriches academic results with Unpaywall and PDF parsing when available
 5. **Scores credibility** — citation counts, journal tier, retraction status
 6. **Evaluates hypotheses** — tests each hypothesis against retrieved evidence
-7. **Detects contradictions** — finds conflicting claims using sentence embeddings + LLM
+7. **Detects contradictions** — extracts claims, ranks semantically similar evidence, and runs bounded contradiction analysis
 8. **Synthesises** — structured narrative from the top 10 credible sources
 9. **Reports** — structured, publication-quality research report
-10. **Remembers** — every source is tracked and rechecked every 30 days via a background scheduler
+10. **Remembers** — sources referenced in the persisted final report are tracked for 30-day rechecks via a background scheduler
 
 All powered by a local LLM (Ollama) — **no OpenAI API key required**.
 
@@ -44,11 +43,11 @@ All powered by a local LLM (Ollama) — **no OpenAI API key required**.
 | Feature | Description |
 |---|---|
 | 🧠 **Hypothesis-Driven Research** | Generates falsifiable hypotheses before searching, then evaluates them against evidence |
-| 🔍 **Multi-Source Retrieval** | Queries 6 sources in parallel: SemanticScholar, PubMed, CrossRef, Unpaywall, web, PDFs |
+| 🔍 **Multi-Source Retrieval** | Queries Semantic Scholar, PubMed, CrossRef, and the web in parallel, then enriches academic results with Unpaywall and PDFs when available |
 | ⭐ **Credibility Scoring** | Each source scored 0–1 based on citations, journal tier, and retraction status |
-| ⚡ **Contradiction Detection** | Semantic embedding + LLM identifies conflicting claims between sources |
-| 📊 **Structured Reports** | Executive summary, research sections, hypotheses verdict, citations, confidence score |
-| 🔄 **Living Documents** | Background scheduler rechecks all sources every 30 days |
+| ⚡ **Contradiction Detection** | Uses claim extraction, sentence embeddings, and capped LLM checks to flag conflicting evidence |
+| 📊 **Structured Reports** | Executive summary, sections, hypotheses verdict, citations, and overall confidence |
+| 🔄 **Living Documents** | Background scheduler rechecks tracked report sources every 30 days |
 | 💬 **Follow-up Q&A** | Chat with your report — grounded follow-up answers |
 | 📧 **Email Delivery** | Send reports via SMTP or SendGrid |
 | 🖥️ **Rich Terminal UI** | Colour-coded live pipeline stream, tables, and panels |
@@ -132,7 +131,7 @@ python cli.py scheduler check-now    # trigger an immediate recheck
   ✅ [4/9] Retriever           → 47 sources retrieved (31 after dedup)
   ✅ [5/9] Credibility Scorer  → scored 31 sources
   ✅ [6/9] Hypothesis Eval     → 2 supported, 1 inconclusive
-  ✅ [7/9] Contradiction Det   → 3 contradictions found
+  ✅ [7/9] Contradiction Det   → 2 contradictions flagged after bounded analysis
   ✅ [8/9] Synthesis Engine    → synthesis complete
   ✅ [9/9] Output Generator    → report saved
 
@@ -214,7 +213,7 @@ research_agent/              ← EchoInquiry project root
 │   ├── research_graph.py     ← LangGraph StateGraph (9 nodes)
 │   └── state.py              ← ResearchState TypedDict
 │
-├── agents/                   ← One agent per pipeline node
+├── agents/                   ← Pipeline nodes plus follow-up chat logic
 │   ├── query_parser.py
 │   ├── research_planner.py
 │   ├── hypothesis_engine.py  ← Used for both generation & evaluation
@@ -225,7 +224,7 @@ research_agent/              ← EchoInquiry project root
 │   ├── output_generator.py
 │   └── followup_agent.py
 │
-├── prompts/                  ← LLM prompts (one per agent)
+├── prompts/                  ← Prompt templates for LLM-backed stages
 ├── memory/                   ← Pinecone, DynamoDB registry, NetworkX graph
 ├── tools/                    ← Academic APIs, web scraper, PDF parser, retraction checker
 ├── aws/                      ← DynamoDB, S3 clients
@@ -267,31 +266,29 @@ Copy `.env.example` to `.env` and fill in your values:
 
 ```bash
 # ── LLM (Ollama) ────────────────────────────────────────────────
-OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_MODEL=llama3.2:1b          # or llama3.1:8b, mistral, etc.
-OLLAMA_TEMPERATURE=0.7
-OLLAMA_TIMEOUT=120
+OLLAMA_REQUEST_TIMEOUT_SECONDS=120
 
 # ── AWS ─────────────────────────────────────────────────────────
 AWS_REGION=us-east-1
-AWS_ACCESS_KEY_ID=your_key_here
+AWS_ACCESS_KEY_ID=your_key_here       # standard AWS env var
 AWS_SECRET_ACCESS_KEY=your_secret_here
 
 # ── DynamoDB Tables ─────────────────────────────────────────────
-DYNAMODB_SESSIONS_TABLE=research-sessions
-DYNAMODB_SOURCES_TABLE=research-sources
-DYNAMODB_HYPOTHESES_TABLE=research-hypotheses
-DYNAMODB_CONTRADICTIONS_TABLE=research-contradictions
-DYNAMODB_LIVING_DOCS_TABLE=research-living-docs
+TABLE_SESSIONS=research-agent-sessions
+TABLE_SOURCES=research-agent-sources
+TABLE_HYPOTHESES=research-agent-hypotheses
+TABLE_CONTRADICTIONS=research-agent-contradictions
+TABLE_LIVING_DOC_CHECKS=research-agent-living-doc-checks
 
 # ── S3 Buckets ──────────────────────────────────────────────────
-S3_REPORTS_BUCKET=research-agent-reports
-S3_SOURCES_BUCKET=research-agent-sources
-S3_KNOWLEDGE_GRAPHS_BUCKET=research-knowledge-graphs
+S3_BUCKET_REPORTS=research-agent-reports
+S3_BUCKET_PDFS=research-agent-pdfs
+S3_BUCKET_EXPORTS=research-agent-exports
 
 # ── Pinecone ────────────────────────────────────────────────────
 PINECONE_API_KEY=your_pinecone_key_here
-PINECONE_INDEX_NAME=research-agent
+PINECONE_INDEX_NAME=research-passages
 
 # ── Email (choose one backend) ──────────────────────────────────
 EMAIL_BACKEND=smtp                 # or sendgrid
@@ -317,46 +314,49 @@ Create the required DynamoDB tables and S3 buckets before first run:
 
 ```bash
 # Create DynamoDB tables
-aws dynamodb create-table --table-name research-sessions \
+aws dynamodb create-table --table-name research-agent-sessions \
   --attribute-definitions AttributeName=session_id,AttributeType=S \
   --key-schema AttributeName=session_id,KeyType=HASH \
   --billing-mode PAY_PER_REQUEST --region us-east-1
 
-aws dynamodb create-table --table-name research-sources \
-  --attribute-definitions AttributeName=source_id,AttributeType=S \
+aws dynamodb create-table --table-name research-agent-sources \
+  --attribute-definitions AttributeName=source_id,AttributeType=S AttributeName=session_id,AttributeType=S \
   --key-schema AttributeName=source_id,KeyType=HASH \
+  --global-secondary-indexes '[{"IndexName":"session-index","KeySchema":[{"AttributeName":"session_id","KeyType":"HASH"}],"Projection":{"ProjectionType":"ALL"}}]' \
   --billing-mode PAY_PER_REQUEST --region us-east-1
 
-aws dynamodb create-table --table-name research-hypotheses \
-  --attribute-definitions AttributeName=hypothesis_id,AttributeType=S \
+aws dynamodb create-table --table-name research-agent-hypotheses \
+  --attribute-definitions AttributeName=hypothesis_id,AttributeType=S AttributeName=session_id,AttributeType=S \
   --key-schema AttributeName=hypothesis_id,KeyType=HASH \
+  --global-secondary-indexes '[{"IndexName":"session-index","KeySchema":[{"AttributeName":"session_id","KeyType":"HASH"}],"Projection":{"ProjectionType":"ALL"}}]' \
   --billing-mode PAY_PER_REQUEST --region us-east-1
 
-aws dynamodb create-table --table-name research-contradictions \
-  --attribute-definitions AttributeName=contradiction_id,AttributeType=S \
+aws dynamodb create-table --table-name research-agent-contradictions \
+  --attribute-definitions AttributeName=contradiction_id,AttributeType=S AttributeName=session_id,AttributeType=S \
   --key-schema AttributeName=contradiction_id,KeyType=HASH \
+  --global-secondary-indexes '[{"IndexName":"session-index","KeySchema":[{"AttributeName":"session_id","KeyType":"HASH"}],"Projection":{"ProjectionType":"ALL"}}]' \
   --billing-mode PAY_PER_REQUEST --region us-east-1
 
-aws dynamodb create-table --table-name research-living-docs \
-  --attribute-definitions AttributeName=source_id,AttributeType=S \
-  --key-schema AttributeName=source_id,KeyType=HASH \
+aws dynamodb create-table --table-name research-agent-living-doc-checks \
+  --attribute-definitions AttributeName=check_id,AttributeType=S \
+  --key-schema AttributeName=check_id,KeyType=HASH \
   --billing-mode PAY_PER_REQUEST --region us-east-1
 
 # Create S3 buckets
 aws s3 mb s3://research-agent-reports --region us-east-1
-aws s3 mb s3://research-agent-sources --region us-east-1
-aws s3 mb s3://research-knowledge-graphs --region us-east-1
+aws s3 mb s3://research-agent-pdfs --region us-east-1
+aws s3 mb s3://research-agent-exports --region us-east-1
 ```
 
 ---
 
 ## 🧪 Running Tests
 
+The repository includes focused regression tests under `tests/`. Run:
+
 ```bash
 pytest
 ```
-
-Uses `moto` for AWS service mocking — no real AWS calls during tests.
 
 ---
 
@@ -368,31 +368,30 @@ Every research run produces a structured `final_report` with these sections:
 {
   "title": "Research Report: ...",
   "executive_summary": "...",
-  "research_sections": [
-    {"heading": "...", "findings": "...", "evidence_strength": "high"}
+  "sections": [
+    {"heading": "...", "content": "...", "supporting_source_ids": ["source_1"]}
   ],
   "hypotheses_verdict": [
     {"id": "h1", "statement": "...", "verdict": "supported",
-     "confidence_posterior": 0.87, "supporting_evidence": [...]}
+     "summary": "..."}
   ],
   "contradictions_flagged": [
-    {"claim_a": "...", "claim_b": "...", "severity": "high",
-     "explanation": "..."}
+    {"summary": "...", "severity": "high", "action": "..."}
   ],
   "research_gaps": ["Gap 1: ...", "Gap 2: ..."],
   "citations": [
-    {"title": "...", "authors": [...], "year": 2023,
-     "doi": "...", "credibility_score": 0.92}
+    {"source_id": "source_1", "title": "...", "authors": "Author A, Author B",
+     "year": "2023", "doi": "...", "url": "..."}
   ],
-  "confidence_score": 0.82,
-  "followup_recommendations": ["What is the role of...", "How does..."]
+  "confidence_overall": 0.82,
+  "follow_up_questions": ["What is the role of...", "How does..."]
 }
 ```
 
-Reports are also saved as:
-- `report.json` — full machine-readable report
-- `report.txt` — plain-text version for readability
-- Uploaded to S3 under `{session_id}/`
+Reports are also stored as:
+- S3 JSON report at `reports/{session_id}/{slug}.json`
+- S3 plain-text report at `reports/{session_id}/{slug}.txt`
+- Optional local CLI exports such as `research_report_<query>_<timestamp>.json` and `.txt`
 
 ---
 
@@ -413,10 +412,9 @@ python cli.py scheduler status
 
 **What gets rechecked every 30 days:**
 - 🔴 **Retraction status** — has the paper been retracted?
-- 🔗 **Link health** — is the source URL still alive?
+- 🔗 **Link health** — is the source URL still alive? (for web sources)
 - 📈 **Citation count** — has the paper gained or lost citations?
-- 🔓 **Open access status** — is a full-text PDF now available?
-- 📄 **Content integrity** — has the abstract been modified?
+- 📄 **Stored source metadata** — tracked source records are updated with any detected changes and the next scheduled check
 
 The scheduler runs as a background thread when using the API (`main.py`). In CLI mode, start it explicitly with `python cli.py scheduler start`.
 
@@ -516,10 +514,14 @@ This gives you:
 4. Run tests: `pytest`
 5. Push and open a pull request
 
+## 📄 License
+
+A repository license file has not been added yet.
+
 ---
 
 <div align="center">
 
-Built with using LangGraph, Ollama, and Python — **EchoInquiry**
+Built with ❤️ using LangGraph, Ollama, and Python — **EchoInquiry**
 
 </div>

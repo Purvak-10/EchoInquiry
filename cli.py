@@ -510,7 +510,7 @@ def print_full_report(final_report: dict, state: dict, query: str):
             max_col=28,
         )
     else:
-        print(clr("  No contradictions flagged — sources appear consistent.", GREEN))
+        print(clr("  No contradictions flagged under current detector limits.", GREEN))
 
     # ── 6. Research Gaps ─────────────────────────────────────────────────────
     gaps = final_report.get("research_gaps", [])

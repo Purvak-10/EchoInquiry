@@ -29,11 +29,11 @@
 The **EchoInquiry** is a fully automated, multi-agent AI system that accepts a plain-language research query and produces a publication-quality structured research report. It is not a simple RAG (retrieval-augmented generation) chatbot — it implements a complete research methodology:
 
 - **Hypothesis-driven research**: generates falsifiable hypotheses *before* searching, then tests them against retrieved evidence.
-- **Multi-source retrieval**: queries four academic databases simultaneously plus live web search.
+- **Multi-source retrieval**: queries Semantic Scholar, PubMed, CrossRef, and live web search in parallel, then optionally enriches academic results with Unpaywall/PDF processing.
 - **Credibility scoring**: each source is scored on citation count, journal tier, and retraction status.
-- **Contradiction detection**: uses sentence embeddings + LLM analysis to surface conflicting claims between sources.
-- **Synthesis**: produces a structured report with executive summary, research sections, hypothesis verdicts, contradictions, gaps, and citations.
-- **Living documents**: background scheduler re-checks every source every 30 days for retractions, dead links, and citation updates.
+- **Contradiction detection**: uses sentence embeddings + capped LLM analysis to surface conflicting claims between high-priority sources.
+- **Synthesis**: produces a structured report with executive summary, sections, hypothesis verdicts, contradictions, gaps, and citations.
+- **Living documents**: background scheduler re-checks tracked report sources every 30 days for retractions, dead links, and citation updates.
 - **Follow-up Q&A**: after report generation, users can ask natural-language follow-up questions answered in the context of the report.
 
 ---
@@ -45,13 +45,13 @@ The **EchoInquiry** is a fully automated, multi-agent AI system that accepts a p
 | Query Understanding | Parses raw natural-language queries into structured intent, domain, scope, sub-questions, and keywords |
 | Research Planning | Generates a priority-ordered task graph with search strategies per sub-topic |
 | Hypothesis Generation | Produces N falsifiable hypotheses with mechanism, predicted evidence, and falsification criteria |
-| Multi-source Retrieval | Parallel search across SemanticScholar, PubMed, CrossRef, Unpaywall + web scraping + PDF parsing |
+| Multi-source Retrieval | Parallel search across SemanticScholar, PubMed, CrossRef, and the web, followed by optional Unpaywall/PDF enrichment |
 | Credibility Scoring | Citation-count weighting + journal tier + retraction check = per-source credibility score (0–1) |
-| Contradiction Detection | Semantic embedding similarity + LLM analysis across all pairs of source claims |
+| Contradiction Detection | Semantic embedding similarity + bounded LLM analysis over ranked candidate claim pairs |
 | Hypothesis Evaluation | Post-retrieval LLM verdict on each hypothesis with supporting and opposing evidence |
 | Synthesis | Structured LLM synthesis of top-10 credible sources |
-| Report Generation | Full structured report saved as JSON + plain-text with DynamoDB + S3 persistence |
-| Living Documents | APScheduler 30-day background job rechecks every tracked source |
+| Report Generation | Full structured report persisted to DynamoDB + S3, with optional local JSON/TXT export from the CLI |
+| Living Documents | APScheduler 30-day background job rechecks every tracked report source |
 | Follow-up Chat | Contextual Q&A loop grounded in the generated report |
 | Email Delivery | SMTP or SendGrid email of the full report |
 | CLI Interface | Rich terminal UI with live pipeline stream, coloured tables, email prompt |
@@ -88,7 +88,7 @@ The **EchoInquiry** is a fully automated, multi-agent AI system that accepts a p
 ### APIs & Web
 | Component | Library |
 |---|---|
-| HTTP requests | `httpx`, `requests` |
+| HTTP requests | `requests` |
 | Web scraping | `BeautifulSoup4`, `lxml` |
 | PDF parsing | **PyMuPDF** (`fitz`) |
 | Retry / backoff | `backoff` |
@@ -133,9 +133,10 @@ core_question   — single distilled research question
 sub_questions   — list of subsidiary questions
 ambiguities     — unclear aspects requiring assumption
 keywords        — search terms
+exclude_keywords — terms to avoid in retrieval
 time_range      — publication date filter
 output_format   — desired report format
-hypothesis_count — how many hypotheses to generate
+is_academic     — whether the query should prefer academic literature
 ```
 
 ---
@@ -151,7 +152,7 @@ hypothesis_count — how many hypotheses to generate
 - LLM produces a `task_graph` — ordered list of search tasks
 - Each task has: `task_id`, `task_type`, `description`, `depends_on`, `priority`, `keywords`, `target_sources`
 - Falls back to a single generic web search task if LLM fails
-- Uses internal `PriorityTaskQueue` (min-heap by priority)
+- Validates task structure and sorts tasks by ascending priority
 
 **Output**: `research_plan` (dict) containing:
 ```
@@ -170,7 +171,7 @@ search_strategy          — breadth_first / depth_first / targeted
 **Input**: `parsed_query`
 
 **Processing**:
-- Uses `HYPOTHESIS_GENERATION_PROMPT` with core_question, domain, sub_questions, hypothesis_count
+- Uses `HYPOTHESIS_GENERATION_PROMPT` with core_question, domain, sub_questions, and a hypothesis count that defaults to `3` when absent
 - LLM generates N hypotheses
 - Each hypothesis is enriched with evaluation placeholders
 
@@ -193,14 +194,15 @@ verdict               — "" (filled in evaluation step)
 
 ### 4.4 `retriever` — `agents/retriever.py`
 
-**Purpose**: Fetch academic sources from multiple databases in parallel, then deduplicate.
+**Purpose**: Fetch academic sources from multiple search backends in parallel, then deduplicate and optionally enrich results.
 
 **Input**: `parsed_query`, `research_plan`
 
 **Processing**:
 - Extracts keywords from parsed_query and task_graph
-- Uses `ThreadPoolExecutor` to call all sources concurrently with a timeout
+- Uses `ThreadPoolExecutor(max_workers=4)` for concurrent search workers with a timeout
 - Deduplication: first by DOI (exact match), then by title (normalised lowercase)
+- Optionally enriches DOI-backed results with Unpaywall PDF discovery, PDF parsing, and embeddings after the initial search phase
 - Falls back to simpler keyword extraction if plan is missing
 
 **Sources queried**:
@@ -209,14 +211,14 @@ verdict               — "" (filled in evaluation step)
 | Semantic Scholar | `SemanticScholarAPI` | Papers with citation counts, abstracts, DOIs |
 | PubMed | `PubMedAPI` | Biomedical literature |
 | CrossRef | `CrossrefAPI` | DOI metadata, publication details |
-| Unpaywall | `UnpaywallAPI` | Open-access PDF links |
 | Web Scraper | `WebScraper` | General web articles and blogs |
-| PDF Parser | `PDFParser` | Text extracted from linked PDFs |
+| Unpaywall | `UnpaywallAPI` | Post-retrieval open-access PDF discovery for DOI-backed papers |
+| PDF Parser | `PDFParser` | Text extracted from downloaded PDFs during enrichment |
 
 **Output**: `retrieved_sources` (list of dicts), each a standardised source object:
 ```
 title, abstract, authors, year, doi, url,
-source_api, citation_count, journal, full_text
+source_api, citation_count, journal, full_text_snippet, s3_pdf_uri
 ```
 
 ---
@@ -264,10 +266,10 @@ source_api, citation_count, journal, full_text
 
 **Processing**:
 1. **Claim extraction**: LLM extracts factual claims from each source abstract (using `CLAIM_EXTRACTION_PROMPT`)
-2. **Semantic similarity**: `SentenceTransformer` encodes all claims; cosine similarity computed for all pairs via `itertools.combinations`
-3. **Candidate pairs**: pairs with similarity above threshold are flagged as potentially contradictory
+2. **Semantic similarity**: `SentenceTransformer` encodes claims and scores cross-source similarity
+3. **Candidate pruning**: only top-ranked, above-threshold pairs are kept
 4. **LLM analysis**: `CONTRADICTION_ANALYSIS_PROMPT` confirms and describes each contradiction
-5. Stores contradictions in DynamoDB
+5. Returns bounded contradiction findings to downstream synthesis/output stages
 
 **Output**: `contradictions` (list of dicts), each containing:
 ```
@@ -275,7 +277,7 @@ claim_a, claim_b      — the two contradicting claims
 source_a, source_b    — where each claim came from
 severity              — low / medium / high
 explanation           — why they contradict
-confidence            — LLM confidence in the contradiction
+resolution_hint       — how to interpret or resolve the conflict
 ```
 
 ---
@@ -298,28 +300,29 @@ confidence            — LLM confidence in the contradiction
 
 ### 4.9 `output_generator` — `agents/output_generator.py`
 
-**Purpose**: Generate the final structured research report and persist it everywhere.
+**Purpose**: Generate the final structured research report and persist the canonical report artifacts.
 
 **Input**: All state fields — `synthesis`, `hypotheses`, `contradictions`, `retrieved_sources`, `parsed_query`, `research_plan`
 
 **Processing**:
 - Renders `OUTPUT_PROMPT` with all upstream results
-- LLM generates final report via streaming (`llm_stream`)
-- Saves `.txt` and `.json` report files locally
-- Persists to DynamoDB (`sessions` table)
-- Uploads to S3 (`reports` bucket)
+- Calls the LLM through `llm_call_with_retry`
+- Normalises and quality-checks the report; falls back to a grounded local builder when needed
+- Persists the report to DynamoDB (`sessions` table)
+- Uploads JSON + plain-text report artifacts to S3 (`reports` bucket)
+- Local `.json` / `.txt` export is handled later by the CLI when the user opts in
 
 **Output**: `final_report` (dict) containing:
 ```
 title
 executive_summary
-research_sections       — list of themed sections with findings
+sections                — list of themed sections with supporting sources
 hypotheses_verdict      — evaluated hypotheses
 contradictions_flagged  — all contradictions with severity
 research_gaps           — identified gaps for future research
-citations               — all sources with credibility scores
-confidence_score        — overall report confidence (0–1)
-followup_recommendations — suggested follow-up questions
+citations               — cited sources with title/author/year/DOI-or-URL metadata
+confidence_overall      — overall report confidence (0–1)
+follow_up_questions     — suggested follow-up questions
 ```
 
 ---
@@ -328,22 +331,22 @@ followup_recommendations — suggested follow-up questions
 
 ### 5.1 Source Registry — `memory/source_registry.py`
 
-Tracks every retrieved source across sessions in DynamoDB.
+Tracks report-cited sources across sessions in DynamoDB.
 
 - **Purpose**: Deduplication across sessions, source reuse, living-document tracking
 - **Storage**: DynamoDB `sources` table
-- **Key operations**: `register_source()`, `get_source_by_doi()`, `get_sources_for_session()`
+- **Key operations**: `register_source()`, `register_all_from_report()`, `get_all_for_session()`, `get_alerts()`
 
 ### 5.2 Vector Store — `memory/vector_store.py`
 
 Semantic search over all previously retrieved sources.
 
 - **Backend**: **Pinecone** (serverless, `us-east-1`)
-- **Index**: `research-agent` (or `PINECONE_INDEX_NAME` env var)
+- **Index**: `research-passages` (or `PINECONE_INDEX_NAME` env var)
 - **Embeddings**: `sentence-transformers/all-MiniLM-L6-v2` — 384-dimensional dense vectors
-- **Key operations**: `upsert_sources()`, `similarity_search()`, `delete_by_session()`
+- **Key operations**: `add_source()`, `add_sources_batch()`, `search()`, `search_across_sessions()`
 - **Metadata stored per vector**: `session_id`, `title`, `doi`, `year`, `credibility_score`, `text` (preview)
-- Validates embedding dimension matches index at startup; auto-recreates index if dimension mismatch
+- Validates embedding dimension matches config at startup and raises if it does not
 
 ### 5.3 Knowledge Graph — `memory/knowledge_graph.py`
 
@@ -352,9 +355,9 @@ Directed conceptual graph connecting research entities across sessions.
 - **Backend**: **NetworkX** `DiGraph`, serialised as JSON to **AWS S3**
 - **Node types**: `concept`, `source`, `claim`, `author`, `session`
 - **Edge types**: `supports`, `contradicts`, `from_source`, `authored_by`, `cites`, `related_to`, `appears_in`
-- **Key operations**: `add_source()`, `add_session()`, `find_related_concepts()`, `save()` / `load()`
+- **Key operations**: `add_source_node()`, `add_session_node()`, `get_related_concepts()`, `find_cross_session_connections()`, `save()` / `load()`
 - Concepts are extracted from text by filtering stop-words and short tokens (length > 5)
-- Serialised graph stored at `s3://knowledge-graphs-bucket/research_knowledge_graph.json`
+- Serialised graph stored in the exports bucket at the configured `S3_KNOWLEDGE_GRAPH_KEY` (default `knowledge-graph/graph.json`)
 
 ---
 
@@ -367,7 +370,7 @@ Directed conceptual graph connecting research entities across sessions.
 | **CrossRef** | DOI resolution, metadata, journal info | `backoff` with 3 retries |
 | **Unpaywall** | Open-access PDF URLs from DOIs | `backoff` with 3 retries |
 | **Web Scraper** | General web articles | `BeautifulSoup4` HTML parsing |
-| **Retraction Watch / CrossRef** | Retraction status for DOIs | `tools/retraction_checker.py` |
+| **CrossRef metadata** | Retraction status for DOIs | `tools/retraction_checker.py` |
 
 All API wrappers return a normalised `_base_source()` dict with consistent field names, making them interchangeable for downstream processing.
 
@@ -379,19 +382,19 @@ All API wrappers return a normalised `_base_source()` dict with consistent field
 
 | Table (env var) | Contents |
 |---|---|
-| `DYNAMODB_SESSIONS_TABLE` | Per-session metadata, raw query, timestamps, final report JSON |
-| `DYNAMODB_SOURCES_TABLE` | All retrieved sources with credibility scores |
-| `DYNAMODB_HYPOTHESES_TABLE` | Per-session hypothesis records with verdicts |
-| `DYNAMODB_CONTRADICTIONS_TABLE` | Detected contradictions with severity |
-| `DYNAMODB_LIVING_DOCS_TABLE` | Sources tracked for 30-day recheck schedule |
+| `TABLE_SESSIONS` | Per-session metadata, raw query, timestamps, final report JSON |
+| `TABLE_SOURCES` | Tracked report sources with credibility and recheck metadata |
+| `TABLE_HYPOTHESES` | Per-session hypothesis records with verdicts |
+| `TABLE_CONTRADICTIONS` | Detected contradictions with severity |
+| `TABLE_LIVING_DOC_CHECKS` | Living-document check records and alert state |
 
 ### S3 Buckets
 
 | Bucket (env var) | Contents |
 |---|---|
-| `S3_REPORTS_BUCKET` | Final research reports as JSON and plain-text |
-| `S3_SOURCES_BUCKET` | Raw source documents and PDFs |
-| `S3_KNOWLEDGE_GRAPHS_BUCKET` | Serialised NetworkX knowledge graph JSON |
+| `S3_BUCKET_REPORTS` | Final research reports as JSON and plain-text |
+| `S3_BUCKET_PDFS` | Downloaded PDFs |
+| `S3_BUCKET_EXPORTS` | Serialised knowledge graph and export artifacts |
 
 ### AWS Region
 
@@ -412,7 +415,7 @@ Four API classes, all sharing a `_base_source()` normalised return format:
 
 ### `tools/web_scraper.py` — Web Scraper
 
-- HTTP GET with `requests`/`httpx`
+- HTTP GET with `requests`
 - HTML parsing via `BeautifulSoup4`
 - Extracts: title, main body text, URL, domain
 - Used for grey literature and non-indexed sources
@@ -420,7 +423,7 @@ Four API classes, all sharing a `_base_source()` normalised return format:
 ### `tools/pdf_parser.py` — PDF Parser
 
 - Uses **PyMuPDF** (`fitz`) to extract text from PDFs
-- Handles both local files and remote URLs (downloads to temp)
+- Parses already-downloaded PDF bytes into full text, sections, and references
 - Returns extracted text blocks and metadata
 
 ### `tools/retraction_checker.py` — Retraction Checker
@@ -446,21 +449,20 @@ Performs the actual rechecking of individual sources:
 | Check | What it does |
 |---|---|
 | Retraction check | Re-queries CrossRef for retraction status |
-| Dead link check | HTTP HEAD request to source URL |
-| Citation update | Re-queries Semantic Scholar for updated citation count |
-| Access change | Checks if open-access status changed (Unpaywall) |
-| Content hash | SHA-256 of abstract to detect content modification |
+| Dead link check | HTTP `HEAD` request to source URL |
+| Citation update | Re-queries CrossRef by DOI, then falls back to Semantic Scholar by title |
+| Source record update | Updates `next_check_at`, timestamps, and changed metadata on the source record |
 
-- Uses `ThreadPoolExecutor` (max 5 workers)
+- Processes sources in async batches of up to 5 and uses `ThreadPoolExecutor` only for blocking link checks
 - 0.5-second delay between requests (rate limiting)
-- Reads sources to recheck from DynamoDB `living_docs` table
+- Reads sources due for recheck from the DynamoDB `sources` table via `next_check_at`
 
 #### `scheduler/living_doc_scheduler.py` — `LivingDocumentScheduler`
 
 - **Trigger**: Every 30 days (`IntervalTrigger(days=30)`)
 - **Backend**: APScheduler `BackgroundScheduler`
 - **Single-instance guard**: `max_instances=1` prevents concurrent runs
-- **Lifecycle**: started on FastAPI app startup, stopped on shutdown
+- **Lifecycle**: started on FastAPI app startup, or manually via CLI scheduler commands
 - Logs `last_check_at` and `next_check_at` timestamps
 
 ### Scheduler CLI Commands
@@ -476,7 +478,7 @@ python cli.py scheduler check-now    # manually trigger an immediate recheck
 
 ## 10. Entry Points
 
-### 10.1 CLI — `cli.py` (946 lines)
+### 10.1 CLI — `cli.py`
 
 The primary interactive interface. Built with ANSI colour codes and Rich library.
 
@@ -493,7 +495,7 @@ python cli.py scheduler check-now           # manual recheck
 **Features:**
 - Live pipeline stream — prints each node's result as it completes
 - Full report display: executive summary, research sections, hypotheses table, conclusions, contradictions table (colour-coded by severity), research gaps, citations table, confidence score, follow-up recommendations
-- Email prompt offered after each pipeline step and at completion
+- Email prompt offered after the full report and again at the end of the session
 - Follow-up Q&A chat loop using `FollowupAgent`
 - Save report as JSON and plain-text files
 
@@ -571,10 +573,8 @@ All configuration is in `config.py`, loaded from environment variables via `os.g
 ### LLM Configuration
 | Variable | Default | Description |
 |---|---|---|
-| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL |
 | `OLLAMA_MODEL` | `llama3.2:1b` | Default model |
-| `OLLAMA_TEMPERATURE` | `0.7` | Generation temperature |
-| `OLLAMA_TIMEOUT` | `120` | Request timeout (seconds) |
+| `OLLAMA_REQUEST_TIMEOUT_SECONDS` | `120` | Request timeout (seconds) |
 
 ### AWS Configuration
 | Variable | Default | Description |
@@ -587,25 +587,25 @@ All configuration is in `config.py`, loaded from environment variables via `os.g
 | Variable | Default | Description |
 |---|---|---|
 | `PINECONE_API_KEY` | — | Pinecone API key |
-| `PINECONE_INDEX_NAME` | `research-agent` | Vector index name |
+| `PINECONE_INDEX_NAME` | `research-passages` | Vector index name |
 | `EMBEDDING_MODEL_NAME` | `all-MiniLM-L6-v2` | Sentence transformer model |
 | `EMBEDDING_DIMENSION` | `384` | Vector dimension |
 
 ### DynamoDB Table Names
 | Variable | Default |
 |---|---|
-| `DYNAMODB_SESSIONS_TABLE` | `research-sessions` |
-| `DYNAMODB_SOURCES_TABLE` | `research-sources` |
-| `DYNAMODB_HYPOTHESES_TABLE` | `research-hypotheses` |
-| `DYNAMODB_CONTRADICTIONS_TABLE` | `research-contradictions` |
-| `DYNAMODB_LIVING_DOCS_TABLE` | `research-living-docs` |
+| `TABLE_SESSIONS` | `research-agent-sessions` |
+| `TABLE_SOURCES` | `research-agent-sources` |
+| `TABLE_HYPOTHESES` | `research-agent-hypotheses` |
+| `TABLE_CONTRADICTIONS` | `research-agent-contradictions` |
+| `TABLE_LIVING_DOC_CHECKS` | `research-agent-living-doc-checks` |
 
 ### S3 Bucket Names
 | Variable | Default |
 |---|---|
-| `S3_REPORTS_BUCKET` | `research-agent-reports` |
-| `S3_SOURCES_BUCKET` | `research-agent-sources` |
-| `S3_KNOWLEDGE_GRAPHS_BUCKET` | `research-knowledge-graphs` |
+| `S3_BUCKET_REPORTS` | `research-agent-reports` |
+| `S3_BUCKET_PDFS` | `research-agent-pdfs` |
+| `S3_BUCKET_EXPORTS` | `research-agent-exports` |
 
 ### Email Configuration
 | Variable | Default | Description |
@@ -632,7 +632,7 @@ All configuration is in `config.py`, loaded from environment variables via `os.g
 ```
 research_agent/              ← EchoInquiry project root
 │
-├── cli.py                    ← Primary CLI entry point (946 lines)
+├── cli.py                    ← Primary CLI entry point
 ├── main.py                   ← FastAPI REST API entry point
 ├── config.py                 ← All configuration from env vars
 ├── requirements.txt          ← All Python dependencies
@@ -641,7 +641,7 @@ research_agent/              ← EchoInquiry project root
 │   ├── research_graph.py     ← LangGraph StateGraph definition (9 nodes)
 │   └── state.py              ← ResearchState TypedDict
 │
-├── agents/                   ← One file per pipeline node
+├── agents/                   ← Pipeline nodes plus follow-up chat
 │   ├── query_parser.py       ← Node 1: parse raw query
 │   ├── research_planner.py   ← Node 2: plan search tasks
 │   ├── hypothesis_engine.py  ← Node 3 & 6: generate + evaluate hypotheses
@@ -652,7 +652,7 @@ research_agent/              ← EchoInquiry project root
 │   ├── output_generator.py   ← Node 9: generate final report
 │   └── followup_agent.py     ← Post-pipeline: Q&A chat
 │
-├── prompts/                  ← LLM prompt strings (one per agent)
+├── prompts/                  ← Prompt strings for LLM-backed stages
 │   ├── query_parser_prompt.py
 │   ├── planner_prompt.py
 │   ├── hypothesis_prompt.py
@@ -675,7 +675,7 @@ research_agent/              ← EchoInquiry project root
 ├── aws/
 │   ├── dynamodb_client.py    ← DynamoDB CRUD operations
 │   ├── s3_client.py          ← S3 upload/download/list
-│   └── llm_client.py         ← (AWS Bedrock LLM option)
+│   └── llm_client.py         ← Ollama client wrapper
 │
 ├── living_document/
 │   ├── recheck_engine.py     ← Source rechecking logic
@@ -709,7 +709,7 @@ User Query (str)
   hypothesis_gen      → hypotheses[] (falsifiable, with priors)
        │
        ▼
-  retriever           → retrieved_sources[] (from 4 APIs + web + PDFs)
+  retriever           → retrieved_sources[] (from 4 parallel search workers + optional PDF enrichment)
        │
        ▼
   credibility_scorer  → retrieved_sources[] + credibility_score per source
@@ -726,10 +726,11 @@ User Query (str)
        ▼
   output_generator    → final_report{} (full structured report)
        │
-       ├──→ DynamoDB (sessions + sources + hypotheses + contradictions)
+       ├──→ DynamoDB (session report)
        ├──→ S3 (report JSON + TXT files)
        ├──→ Pinecone (source embeddings)
        ├──→ NetworkX/S3 (knowledge graph update)
+       └──→ DynamoDB (sources + hypotheses + contradictions in post-pipeline persistence)
        │
        ▼
   CLI display / API response / Email delivery

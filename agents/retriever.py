@@ -33,48 +33,137 @@ _ACADEMIC_DOMAINS = {
     "nutrition", "healthcare", "artificial intelligence healthcare",
 }
 
+_GENERIC_RANKING_TERMS = {
+    "important", "better", "best", "compare", "comparison",
+    "versus", "between", "more", "less", "effects", "impact",
+}
+
+_RANKING_TERM_ALIASES = {
+    "food": {"food", "diet", "dietary", "nutrition", "nutritional"},
+    "diet": {"food", "diet", "dietary", "nutrition", "nutritional"},
+    "nutrition": {"food", "diet", "dietary", "nutrition", "nutritional"},
+    "exercise": {"exercise", "physical activity", "fitness", "training"},
+    "sleep": {"sleep", "sleep quality", "sleep deprivation", "circadian"},
+}
+
 
 # -------------------------------
 # Helper: Deduplication
 # -------------------------------
 def deduplicate_sources(sources: List[Dict]) -> List[Dict]:
     doi_map = {}
-    final_sources = []
 
     for src in sources:
-        doi = src.get("doi")
-        title = (src.get("title") or "").lower()
-        abstract = src.get("abstract") or ""
+        doi = (src.get("doi") or "").strip().lower()
 
         # ---- PRIMARY: DOI dedup ----
         if doi:
-            if doi in doi_map:
-                if len(abstract) > len(doi_map[doi].get("abstract", "")):
-                    doi_map[doi] = src
-            else:
+            if doi not in doi_map or _source_priority(src) > _source_priority(doi_map[doi]):
                 doi_map[doi] = src
             continue
+        doi_map[f"no-doi:{id(src)}"] = src
 
-        # ---- SECONDARY: title overlap ----
-        is_duplicate = False
-        title_words = set(title.split())
-
-        for existing in final_sources:
-            existing_words = set((existing.get("title") or "").lower().split())
-            if not existing_words:
-                continue
-
-            overlap = len(title_words & existing_words) / max(len(title_words), 1)
-
-            if overlap > 0.8:
-                is_duplicate = True
+    selected = []
+    for src in doi_map.values():
+        duplicate_index = None
+        for index, existing in enumerate(selected):
+            if _titles_look_duplicate(src, existing):
+                duplicate_index = index
                 break
 
-        if not is_duplicate:
-            final_sources.append(src)
+        if duplicate_index is None:
+            selected.append(src)
+        elif _source_priority(src) > _source_priority(selected[duplicate_index]):
+            selected[duplicate_index] = src
 
-    final_sources.extend(doi_map.values())
-    return final_sources
+    return selected
+
+
+def _normalize_title(title: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", (title or "").lower())).strip()
+
+
+def _source_priority(source: Dict) -> tuple:
+    return (
+        float(source.get("credibility_score") or 0.0),
+        int(source.get("citation_count") or 0),
+        len(source.get("abstract") or ""),
+        len(source.get("full_text_snippet") or ""),
+    )
+
+
+def _titles_look_duplicate(left: Dict, right: Dict) -> bool:
+    left_title = _normalize_title(left.get("title", ""))
+    right_title = _normalize_title(right.get("title", ""))
+
+    if not left_title or not right_title:
+        return False
+    if left_title == right_title:
+        return True
+
+    left_words = set(left_title.split())
+    right_words = set(right_title.split())
+    if not left_words or not right_words:
+        return False
+
+    overlap = len(left_words & right_words) / max(len(left_words | right_words), 1)
+    return overlap >= 0.9
+
+
+def _ranking_term_groups(keywords: List[str], core_question: str) -> List[set]:
+    groups: List[set] = []
+    candidates = list(keywords or []) + [core_question or ""]
+
+    for candidate in candidates:
+        text = (candidate or "").lower()
+        if not text:
+            continue
+
+        alias_group = set()
+        for token in re.findall(r"[a-zA-Z0-9]+", text):
+            if len(token) < 4 or token in _GENERIC_RANKING_TERMS:
+                continue
+            alias_group.add(token)
+            alias_group.update(_RANKING_TERM_ALIASES.get(token, set()))
+
+        if alias_group:
+            groups.append(alias_group)
+
+    unique_groups = []
+    seen = set()
+    for group in groups:
+        key = tuple(sorted(group))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_groups.append(group)
+    return unique_groups
+
+
+def _source_ranking_score(source: Dict, term_groups: List[set]) -> tuple:
+    haystack = " ".join(
+        [
+            (source.get("title") or ""),
+            (source.get("abstract") or ""),
+            (source.get("full_text_snippet") or ""),
+        ]
+    ).lower()
+
+    group_hits = 0
+    alias_hits = 0
+    for group in term_groups:
+        matched_aliases = [alias for alias in group if alias in haystack]
+        if matched_aliases:
+            group_hits += 1
+            alias_hits += len(matched_aliases)
+
+    return (
+        group_hits,
+        alias_hits,
+        float(source.get("credibility_score") or 0.0),
+        int(source.get("citation_count") or 0),
+        len(source.get("abstract") or ""),
+    )
 
 
 # -------------------------------
@@ -595,7 +684,11 @@ def retriever_node(state: Dict) -> Dict:
     # -------------------------------
     # STEP 8: Cap results
     # -------------------------------
-    deduped.sort(key=lambda x: len(x.get("abstract", "")), reverse=True)
+    ranking_terms = _ranking_term_groups(keywords, core_question)
+    deduped.sort(
+        key=lambda source: _source_ranking_score(source, ranking_terms),
+        reverse=True,
+    )
 
     max_sources = 8 if fast_mode else config.MAX_SOURCES_PER_QUERY
     final_sources = deduped[:max_sources]

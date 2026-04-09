@@ -7,7 +7,6 @@ Source Recheck Engine
 
 import asyncio
 import logging
-import time
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 from concurrent.futures import ThreadPoolExecutor
@@ -152,10 +151,14 @@ class SourceRecheckerEngine:
 
             # Check for retraction (academic sources)
             if doi:
-                retraction_result = self.retraction_checker.check_retraction(doi)
+                retraction_result = self.retraction_checker.check(
+                    doi,
+                    source.get("title"),
+                )
                 if retraction_result.get("is_retracted"):
                     logger.warning(f"🚨 RETRACTED: {source.get('title')} (DOI: {doi})")
                     result["is_retracted"] = True
+                    result["has_changes"] = True
                     result["changes"]["retraction_status"] = "retracted"
                     result["changes"]["retraction_details"] = retraction_result
                     result["updated"] = True
@@ -166,6 +169,7 @@ class SourceRecheckerEngine:
                 if not is_alive:
                     logger.warning(f"💀 DEAD LINK: {url}")
                     result["is_dead_link"] = True
+                    result["has_changes"] = True
                     result["changes"]["access_status"] = "dead_link"
                     result["updated"] = True
 
@@ -178,7 +182,7 @@ class SourceRecheckerEngine:
                     result["updated"] = True
 
             # Update database if changes detected
-            if result["updated"]:
+            if result["updated"] and source_id:
                 self._update_source_record(source_id, result["changes"])
 
             return result
@@ -236,10 +240,10 @@ class SourceRecheckerEngine:
 
             # Try DOI first
             if doi:
-                crossref_result = self.crossref_api.fetch_paper(doi)
+                crossref_result = self.crossref_api.get_by_doi(doi)
                 if crossref_result:
                     citation_count = crossref_result.get("citation_count")
-                    if citation_count and citation_count != source.get(
+                    if citation_count is not None and citation_count != source.get(
                         "citation_count"
                     ):
                         updates["citation_count"] = citation_count
@@ -255,7 +259,7 @@ class SourceRecheckerEngine:
                 if semantic_results and len(semantic_results) > 0:
                     paper = semantic_results[0]
                     citation_count = paper.get("citation_count")
-                    if citation_count and citation_count != source.get(
+                    if citation_count is not None and citation_count != source.get(
                         "citation_count"
                     ):
                         updates["citation_count"] = citation_count

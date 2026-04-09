@@ -5,6 +5,7 @@
 
 # Python bytecode and cache folders
 __pycache__/
+.pytest_cache/
 *.py[cod]
 *.pyc
 .venv/
