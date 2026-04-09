@@ -360,8 +360,8 @@ class UnpaywallAPI:
         if loc and loc.get("url_for_pdf"):
             return loc["url_for_pdf"]
 
-        for l in data.get("oa_locations", []):
-            if l.get("url_for_pdf"):
-                return l["url_for_pdf"]
+        for loc in data.get("oa_locations", []):
+            if loc.get("url_for_pdf"):
+                return loc["url_for_pdf"]
 
         return None

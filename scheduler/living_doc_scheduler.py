@@ -224,4 +224,4 @@ class LivingDocumentScheduler:
 
 
 # Global scheduler instance
-living_doc_scheduler = LivingDocumentScheduler()
+scheduler_manager = LivingDocumentScheduler()

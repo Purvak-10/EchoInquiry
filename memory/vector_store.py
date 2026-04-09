@@ -92,8 +92,8 @@ class VectorStore:
             self.index = self.pc.Index(self.index_name)
             logger.info("Connected to Pinecone index.")
 
-            # Load embedding model
-            self.embedder = SentenceTransformer(config.EMBEDDING_MODEL_NAME)
+            # Reuse the already-loaded model as the embedder (avoids loading twice)
+            self.embedder = self.model
             logger.info("Embedding model loaded.")
 
         except Exception as e:

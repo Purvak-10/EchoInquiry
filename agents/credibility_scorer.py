@@ -151,7 +151,7 @@ def credibility_scorer_node(state: Dict) -> Dict:
 
     retraction_results = {}
     if isinstance(raw_retraction_results, list):
-        for src, result in zip(sources_to_check if 'sources_to_check' in locals() else [], raw_retraction_results):
+        for src, result in zip(sources_to_check, raw_retraction_results):
             source_id = (
                 src.get("source_id")
                 or src.get("id")

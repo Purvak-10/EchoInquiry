@@ -152,7 +152,7 @@ class SourceRecheckerEngine:
 
             # Check for retraction (academic sources)
             if doi:
-                retraction_result = self.retraction_checker.check_retraction(doi)
+                retraction_result = self.retraction_checker.check(doi, source.get("title", ""))
                 if retraction_result.get("is_retracted"):
                     logger.warning(f"🚨 RETRACTED: {source.get('title')} (DOI: {doi})")
                     result["is_retracted"] = True
@@ -211,7 +211,7 @@ class SourceRecheckerEngine:
         """Check if web link is still accessible"""
         try:
             # Run in thread pool to avoid blocking
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             with ThreadPoolExecutor() as executor:
                 result = await loop.run_in_executor(
                     executor,
@@ -236,7 +236,7 @@ class SourceRecheckerEngine:
 
             # Try DOI first
             if doi:
-                crossref_result = self.crossref_api.fetch_paper(doi)
+                crossref_result = self.crossref_api.get_by_doi(doi)
                 if crossref_result:
                     citation_count = crossref_result.get("citation_count")
                     if citation_count and citation_count != source.get(

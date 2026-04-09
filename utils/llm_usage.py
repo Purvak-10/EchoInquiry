@@ -259,7 +259,8 @@ def record_token_usage(
 
 def get_daily_summary(target_date: str | None = None) -> Dict[str, Any]:
     target_date = target_date or datetime.now().astimezone().date().isoformat()
-    path = _usage_log_path()
+    logs_dir = Path(config.PROJECT_ROOT) / "logs"
+    path = logs_dir / f"llm_usage_{target_date}.jsonl"
 
     summary = {
         "date": target_date,

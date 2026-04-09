@@ -44,7 +44,7 @@ All powered by a local LLM (Ollama) — **no OpenAI API key required**.
 | Feature | Description |
 |---|---|
 | 🧠 **Hypothesis-Driven Research** | Generates falsifiable hypotheses before searching, then evaluates them against evidence |
-| 🔍 **Multi-Source Retrieval** | Queries 6 sources in parallel: SemanticScholar, PubMed, CrossRef, Unpaywall, web, PDFs |
+| 🔍 **Multi-Source Retrieval** | Queries 5 sources in parallel: SemanticScholar, PubMed, CrossRef, Unpaywall, and the web |
 | ⭐ **Credibility Scoring** | Each source scored 0–1 based on citations, journal tier, and retraction status |
 | ⚡ **Contradiction Detection** | Semantic embedding + LLM identifies conflicting claims between sources |
 | 📊 **Structured Reports** | Executive summary, research sections, hypotheses verdict, citations, confidence score |
@@ -203,7 +203,7 @@ curl -X POST http://localhost:8000/scheduler/trigger-check
 ## 📦 Project Structure
 
 ```
-research_agent/              ← EchoInquiry project root
+EchoInquiry/                 ← project root
 │
 ├── cli.py                    ← Rich terminal UI (primary entry point)
 ├── main.py                   ← FastAPI REST API
@@ -278,20 +278,20 @@ AWS_ACCESS_KEY_ID=your_key_here
 AWS_SECRET_ACCESS_KEY=your_secret_here
 
 # ── DynamoDB Tables ─────────────────────────────────────────────
-DYNAMODB_SESSIONS_TABLE=research-sessions
-DYNAMODB_SOURCES_TABLE=research-sources
-DYNAMODB_HYPOTHESES_TABLE=research-hypotheses
-DYNAMODB_CONTRADICTIONS_TABLE=research-contradictions
-DYNAMODB_LIVING_DOCS_TABLE=research-living-docs
+TABLE_SESSIONS=research-agent-sessions
+TABLE_SOURCES=research-agent-sources
+TABLE_HYPOTHESES=research-agent-hypotheses
+TABLE_CONTRADICTIONS=research-agent-contradictions
+TABLE_LIVING_DOC_CHECKS=research-agent-living-doc-checks
 
 # ── S3 Buckets ──────────────────────────────────────────────────
-S3_REPORTS_BUCKET=research-agent-reports
-S3_SOURCES_BUCKET=research-agent-sources
-S3_KNOWLEDGE_GRAPHS_BUCKET=research-knowledge-graphs
+S3_BUCKET_REPORTS=research-agent-reports
+S3_BUCKET_PDFS=research-agent-pdfs
+S3_BUCKET_EXPORTS=research-agent-exports
 
 # ── Pinecone ────────────────────────────────────────────────────
 PINECONE_API_KEY=your_pinecone_key_here
-PINECONE_INDEX_NAME=research-agent
+PINECONE_INDEX_NAME=research-passages
 
 # ── Email (choose one backend) ──────────────────────────────────
 EMAIL_BACKEND=smtp                 # or sendgrid
@@ -317,35 +317,35 @@ Create the required DynamoDB tables and S3 buckets before first run:
 
 ```bash
 # Create DynamoDB tables
-aws dynamodb create-table --table-name research-sessions \
+aws dynamodb create-table --table-name research-agent-sessions \
   --attribute-definitions AttributeName=session_id,AttributeType=S \
   --key-schema AttributeName=session_id,KeyType=HASH \
   --billing-mode PAY_PER_REQUEST --region us-east-1
 
-aws dynamodb create-table --table-name research-sources \
+aws dynamodb create-table --table-name research-agent-sources \
   --attribute-definitions AttributeName=source_id,AttributeType=S \
   --key-schema AttributeName=source_id,KeyType=HASH \
   --billing-mode PAY_PER_REQUEST --region us-east-1
 
-aws dynamodb create-table --table-name research-hypotheses \
+aws dynamodb create-table --table-name research-agent-hypotheses \
   --attribute-definitions AttributeName=hypothesis_id,AttributeType=S \
   --key-schema AttributeName=hypothesis_id,KeyType=HASH \
   --billing-mode PAY_PER_REQUEST --region us-east-1
 
-aws dynamodb create-table --table-name research-contradictions \
+aws dynamodb create-table --table-name research-agent-contradictions \
   --attribute-definitions AttributeName=contradiction_id,AttributeType=S \
   --key-schema AttributeName=contradiction_id,KeyType=HASH \
   --billing-mode PAY_PER_REQUEST --region us-east-1
 
-aws dynamodb create-table --table-name research-living-docs \
+aws dynamodb create-table --table-name research-agent-living-doc-checks \
   --attribute-definitions AttributeName=source_id,AttributeType=S \
   --key-schema AttributeName=source_id,KeyType=HASH \
   --billing-mode PAY_PER_REQUEST --region us-east-1
 
 # Create S3 buckets
 aws s3 mb s3://research-agent-reports --region us-east-1
-aws s3 mb s3://research-agent-sources --region us-east-1
-aws s3 mb s3://research-knowledge-graphs --region us-east-1
+aws s3 mb s3://research-agent-pdfs --region us-east-1
+aws s3 mb s3://research-agent-exports --region us-east-1
 ```
 
 ---
