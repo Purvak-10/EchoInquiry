@@ -55,7 +55,7 @@ The **EchoInquiry** is a fully automated, multi-agent AI system that accepts a p
 | Follow-up Chat | Contextual Q&A loop grounded in the generated report |
 | Email Delivery | SMTP or SendGrid email of the full report |
 | CLI Interface | Rich terminal UI with live pipeline stream, coloured tables, email prompt |
-| REST API | FastAPI server for programmatic access |
+| REST API | FastAPI endpoints for health checks and scheduler management |
 
 ---
 
@@ -105,7 +105,7 @@ The **EchoInquiry** is a fully automated, multi-agent AI system that accepts a p
 |---|---|
 | Terminal UI | **Rich** (tables, panels, progress) |
 | Environment config | `python-dotenv` |
-| Testing | `pytest`, `pytest-mock`, `moto` (AWS mocks) |
+| Testing | No committed automated test suite currently |
 
 ---
 
@@ -733,7 +733,7 @@ User Query (str)
        └──→ DynamoDB (sources + hypotheses + contradictions in post-pipeline persistence)
        │
        ▼
-  CLI display / API response / Email delivery
+  CLI display / Email delivery / Optional follow-up chat
        │
        ▼
   FollowupAgent (optional Q&A)

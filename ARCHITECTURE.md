@@ -751,7 +751,7 @@ Which nodes read and write which state fields:
 | `hypotheses` (updated) | `hypothesis_evaluation` (Node 6) | `synthesis_engine`, `output_generator` |
 | `contradictions` | `contradiction_detector` (Node 7) | `synthesis_engine`, `output_generator` |
 | `synthesis` | `synthesis_engine` (Node 8) | `output_generator` |
-| `final_report` | `output_generator` (Node 9) | Caller, CLI display, API response |
+| `final_report` | `output_generator` (Node 9) | Caller, CLI display |
 | `living_doc_id` | `output_generator` (Node 9) | Caller / downstream integrations |
-| `s3_report_uri` | `output_generator` (Node 9) | API response |
+| `s3_report_uri` | `output_generator` (Node 9) | Caller / downstream integrations |
 | `error_log` | Reserved runtime field | Caller / debugging tools |
