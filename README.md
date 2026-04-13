@@ -50,8 +50,8 @@ All powered by a local LLM (Ollama) — **no OpenAI API key required**.
 | 🔄 **Living Documents** | Background scheduler rechecks tracked report sources every 30 days |
 | 💬 **Follow-up Q&A** | Chat with your report — grounded follow-up answers |
 | 📧 **Email Delivery** | Send reports via SMTP or SendGrid |
-| 🖥️ **Rich Terminal UI** | Colour-coded live pipeline stream, tables, and panels |
-| 🌐 **REST API** | FastAPI server for programmatic access |
+| 🖥️ **Terminal UI** | Colour-coded live pipeline stream, tables, and panels |
+| 🌐 **REST API** | FastAPI endpoints for health checks and scheduler management |
 | 🏠 **Local LLM** | Runs entirely with Ollama — no cloud LLM costs |
 | 🗄️ **Cloud Persistence** | AWS DynamoDB (5 tables) + S3 (3 buckets) + Pinecone vector index |
 
@@ -350,12 +350,6 @@ aws s3 mb s3://research-agent-exports --region us-east-1
 
 ---
 
-## 🧪 Running Tests
-
-There is currently no committed automated test suite in the repository.
-
----
-
 ## 📊 Report Structure
 
 Every research run produces a structured `final_report` with these sections:
@@ -472,11 +466,9 @@ This gives you:
 | **Graph DB** | NetworkX (serialised to S3) |
 | **Web scraping** | BeautifulSoup4 + lxml |
 | **PDF parsing** | PyMuPDF (fitz) |
-| **REST API** | FastAPI + Uvicorn |
 | **Scheduler** | APScheduler |
 | **Terminal UI** | Rich |
 | **Observability** | Langfuse |
-| **Testing** | No committed test suite currently |
 
 ---
 
@@ -518,6 +510,6 @@ A repository license file has not been added yet.
 
 <div align="center">
 
-Built with ❤️ using LangGraph, Ollama, and Python — **EchoInquiry**
+Built with using LangGraph, Ollama, and Python — **EchoInquiry**
 
 </div>
